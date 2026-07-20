@@ -18,6 +18,19 @@ async function bootstrap() {
   const port = Number(process.env.PORT ?? 3000);
   const host = process.env.HOST ?? 'localhost';
 
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    if (request.path !== '/' || !['GET', 'HEAD'].includes(request.method)) {
+      next();
+      return;
+    }
+
+    response.status(200).json({
+      status: 'ok',
+      app: 'ZDES API',
+      docs: `/${API_PREFIX}/${SWAGGER_PATH}`,
+    });
+  });
+
   app.setGlobalPrefix(API_PREFIX);
   app.useGlobalFilters(new GlobalExceptionFilter());
   app.useGlobalInterceptors(
