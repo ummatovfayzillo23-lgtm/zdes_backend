@@ -6,6 +6,11 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { getMonthKey, trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { AdvanceQueryDto } from './dto/advance-query.dto';
 import { CreateAdvanceDto } from './dto/create-advance.dto';
@@ -16,8 +21,14 @@ export class AdvanceService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateAdvanceDto, actor: AccessTokenPayload) {
-    const companyId = await this.ensureCompanyExists(dto.companyId);
-    const employeeId = await this.ensureEmployeeBelongsToCompany(dto.employeeId, companyId);
+    const companyId = await this.ensureCompanyExists(
+      resolveScopedCompanyId(actor, dto.companyId),
+    );
+    const employeeId = await this.ensureEmployeeInScope(
+      dto.employeeId,
+      companyId,
+      actor,
+    );
 
     const advanceDate = new Date(dto.date);
     const month = this.resolveMonth(dto.month, advanceDate);
@@ -36,15 +47,21 @@ export class AdvanceService {
     });
   }
 
-  async findAll(query: AdvanceQueryDto) {
+  async findAll(query: AdvanceQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+    });
 
     const where: Prisma.AdvanceWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
-      ...(trimToNull(query.month) ? { month: trimToNull(query.month) as string } : {}),
+      ...(trimToNull(query.month)
+        ? { month: trimToNull(query.month) as string }
+        : {}),
       ...this.buildDateRangeFilter(query.dateFrom, query.dateTo),
     };
 
@@ -67,20 +84,30 @@ export class AdvanceService {
     };
   }
 
-  async findOne(id: string) {
-    return this.findAdvanceByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const advance = await this.findAdvanceByIdOrThrow(id);
+    await this.assertRecordInScope(actor, advance);
+    return advance;
   }
 
   async update(id: string, dto: UpdateAdvanceDto, actor: AccessTokenPayload) {
     const existingAdvance = await this.findAdvanceByIdOrThrow(id);
+    await this.assertRecordInScope(actor, existingAdvance);
+
     const nextCompanyId =
       dto.companyId !== undefined
-        ? await this.ensureCompanyExists(dto.companyId)
+        ? await this.ensureCompanyExists(
+            resolveScopedCompanyId(actor, dto.companyId),
+          )
         : existingAdvance.companyId;
     const nextEmployeeId =
       dto.employeeId !== undefined
-        ? await this.ensureEmployeeBelongsToCompany(dto.employeeId, nextCompanyId)
-        : await this.ensureEmployeeBelongsToCompany(existingAdvance.employeeId, nextCompanyId);
+        ? await this.ensureEmployeeInScope(dto.employeeId, nextCompanyId, actor)
+        : await this.ensureEmployeeInScope(
+            existingAdvance.employeeId,
+            nextCompanyId,
+            actor,
+          );
     const nextDate = dto.date ? new Date(dto.date) : existingAdvance.date;
     const nextMonth =
       dto.month !== undefined
@@ -103,8 +130,9 @@ export class AdvanceService {
     });
   }
 
-  async delete(id: string) {
-    await this.findAdvanceByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const advance = await this.findAdvanceByIdOrThrow(id);
+    await this.assertRecordInScope(actor, advance);
 
     await this.prisma.advance.delete({
       where: { id },
@@ -128,6 +156,25 @@ export class AdvanceService {
     return advance;
   }
 
+  private async assertRecordInScope(
+    actor: AccessTokenPayload,
+    record: { companyId: string; employeeId: string },
+  ): Promise<void> {
+    if (actor.role === 'superadmin' || actor.role === 'admin') {
+      assertWithinScope(actor, record);
+      return;
+    }
+
+    const employee = await this.prisma.user.findUnique({
+      where: { id: record.employeeId },
+      select: { branchId: true },
+    });
+    assertWithinScope(actor, {
+      companyId: record.companyId,
+      branchId: employee?.branchId,
+    });
+  }
+
   private async ensureCompanyExists(companyId: string): Promise<string> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
@@ -141,15 +188,17 @@ export class AdvanceService {
     return company.id;
   }
 
-  private async ensureEmployeeBelongsToCompany(
+  private async ensureEmployeeInScope(
     employeeId: string,
     companyId: string,
+    actor: AccessTokenPayload,
   ): Promise<string> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       select: {
         id: true,
         companyId: true,
+        branchId: true,
       },
     });
 
@@ -158,8 +207,12 @@ export class AdvanceService {
     }
 
     if (employee.companyId !== companyId) {
-      throw new ConflictException('Employee does not belong to the selected company');
+      throw new ConflictException(
+        'Employee does not belong to the selected company',
+      );
     }
+
+    assertWithinScope(actor, employee);
 
     return employee.id;
   }

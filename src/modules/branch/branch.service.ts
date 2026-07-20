@@ -6,6 +6,12 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { BranchQueryDto } from './dto/branch-query.dto';
 import { CreateBranchDto } from './dto/create-branch.dto';
 import { ToggleBranchStatusDto } from './dto/toggle-branch-status.dto';
@@ -15,8 +21,9 @@ import { UpdateBranchDto } from './dto/update-branch.dto';
 export class BranchService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateBranchDto) {
-    const companyId = await this.ensureCompanyExists(dto.companyId);
+  async create(dto: CreateBranchDto, actor: AccessTokenPayload) {
+    const scopedCompanyId = resolveScopedCompanyId(actor, dto.companyId);
+    const companyId = await this.ensureCompanyExists(scopedCompanyId);
     const normalizedName = this.normalizeRequiredName(dto.name);
     await this.ensureNameIsUnique(companyId, normalizedName);
 
@@ -32,14 +39,17 @@ export class BranchService {
     });
   }
 
-  async findAll(query: BranchQueryDto) {
+  async findAll(query: BranchQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+    });
 
     const where: Prisma.BranchWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
       ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
       ...(search
         ? {
@@ -70,16 +80,24 @@ export class BranchService {
     };
   }
 
-  async findOne(id: string) {
-    return this.findBranchByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const branch = await this.findBranchByIdOrThrow(id);
+    assertWithinScope(actor, branch);
+    return branch;
   }
 
-  async update(id: string, dto: UpdateBranchDto) {
+  async update(id: string, dto: UpdateBranchDto, actor: AccessTokenPayload) {
     const existing = await this.findBranchByIdOrThrow(id);
+    assertWithinScope(actor, existing);
+
     const companyId = dto.companyId
-      ? await this.ensureCompanyExists(dto.companyId)
+      ? await this.ensureCompanyExists(
+          resolveScopedCompanyId(actor, dto.companyId),
+        )
       : existing.companyId;
-    const normalizedName = dto.name ? this.normalizeRequiredName(dto.name) : existing.name;
+    const normalizedName = dto.name
+      ? this.normalizeRequiredName(dto.name)
+      : existing.name;
 
     await this.ensureNameIsUnique(companyId, normalizedName, id);
 
@@ -88,7 +106,9 @@ export class BranchService {
       data: {
         companyId,
         name: normalizedName,
-        ...(dto.address !== undefined ? { address: trimToNull(dto.address) } : {}),
+        ...(dto.address !== undefined
+          ? { address: trimToNull(dto.address) }
+          : {}),
         ...(dto.latitude !== undefined ? { latitude: dto.latitude } : {}),
         ...(dto.longitude !== undefined ? { longitude: dto.longitude } : {}),
         ...(dto.radius !== undefined ? { radius: dto.radius } : {}),
@@ -96,8 +116,13 @@ export class BranchService {
     });
   }
 
-  async toggleStatus(id: string, dto: ToggleBranchStatusDto) {
+  async toggleStatus(
+    id: string,
+    dto: ToggleBranchStatusDto,
+    actor: AccessTokenPayload,
+  ) {
     const branch = await this.findBranchByIdOrThrow(id);
+    assertWithinScope(actor, branch);
     const nextIsActive = dto.isActive ?? !branch.isActive;
 
     return this.prisma.branch.update({
@@ -106,8 +131,9 @@ export class BranchService {
     });
   }
 
-  async delete(id: string) {
-    await this.findBranchByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const branch = await this.findBranchByIdOrThrow(id);
+    assertWithinScope(actor, branch);
     await this.prisma.branch.delete({ where: { id } });
     return { success: true as const, id };
   }
@@ -133,9 +159,14 @@ export class BranchService {
     excludedId?: string,
   ): Promise<void> {
     const existing = await this.prisma.branch.findFirst({
-      where: { companyId, name, ...(excludedId ? { id: { not: excludedId } } : {}) },
+      where: {
+        companyId,
+        name,
+        ...(excludedId ? { id: { not: excludedId } } : {}),
+      },
     });
-    if (existing) throw new ConflictException('Branch name already exists in this company');
+    if (existing)
+      throw new ConflictException('Branch name already exists in this company');
   }
 
   private normalizeRequiredName(name: string): string {

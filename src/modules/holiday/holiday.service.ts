@@ -7,6 +7,11 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateHolidayDto } from './dto/create-holiday.dto';
 import { HolidayQueryDto } from './dto/holiday-query.dto';
@@ -17,13 +22,22 @@ export class HolidayService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateHolidayDto, actor: AccessTokenPayload) {
-    const companyId = await this.ensureCompanyExists(dto.companyId);
-    const branchId = await this.resolveBranchId(companyId, dto.branchId);
+    const scopedCompanyId = resolveScopedCompanyId(actor, dto.companyId);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: scopedCompanyId,
+      branchId: dto.branchId,
+    });
+    const companyId = await this.ensureCompanyExists(scopedCompanyId);
+    const branchId = await this.resolveBranchId(companyId, scope.branchId);
     const normalizedName = this.normalizeRequiredName(dto.name);
     const startDate = new Date(dto.startDate);
     const endDate = new Date(dto.endDate);
 
-    this.ensureDateRange(startDate, endDate, 'Holiday end date must be after start date');
+    this.ensureDateRange(
+      startDate,
+      endDate,
+      'Holiday end date must be after start date',
+    );
 
     return this.prisma.holiday.create({
       data: {
@@ -40,16 +54,22 @@ export class HolidayService {
     });
   }
 
-  async findAll(query: HolidayQueryDto) {
+  async findAll(query: HolidayQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+      branchId: query.branchId,
+    });
 
     const where: Prisma.HolidayWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
-      ...(query.branchId ? { branchId: query.branchId } : {}),
-      ...(query.affectsSalary !== undefined ? { affectsSalary: query.affectsSalary } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { branchId: scope.branchId } : {}),
+      ...(query.affectsSalary !== undefined
+        ? { affectsSalary: query.affectsSalary }
+        : {}),
       ...(search ? { name: { contains: search, mode: 'insensitive' } } : {}),
       ...this.buildDateOverlapFilter(query.dateFrom, query.dateTo),
     };
@@ -73,25 +93,46 @@ export class HolidayService {
     };
   }
 
-  async findOne(id: string) {
-    return this.findHolidayByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const holiday = await this.findHolidayByIdOrThrow(id);
+    assertWithinScope(actor, holiday);
+    return holiday;
   }
 
   async update(id: string, dto: UpdateHolidayDto, actor: AccessTokenPayload) {
     const existing = await this.findHolidayByIdOrThrow(id);
+    assertWithinScope(actor, existing);
+
     const companyId =
       dto.companyId !== undefined
-        ? await this.ensureCompanyExists(dto.companyId)
+        ? await this.ensureCompanyExists(
+            resolveScopedCompanyId(actor, dto.companyId),
+          )
         : existing.companyId;
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId,
+      branchId:
+        dto.branchId !== undefined
+          ? dto.branchId
+          : (existing.branchId ?? undefined),
+    });
     const branchId =
       dto.branchId !== undefined
-        ? await this.resolveBranchId(companyId, dto.branchId)
+        ? await this.resolveBranchId(companyId, scope.branchId)
         : await this.resolveBranchId(companyId, existing.branchId);
-    const name = dto.name ? this.normalizeRequiredName(dto.name) : existing.name;
-    const startDate = dto.startDate ? new Date(dto.startDate) : existing.startDate;
+    const name = dto.name
+      ? this.normalizeRequiredName(dto.name)
+      : existing.name;
+    const startDate = dto.startDate
+      ? new Date(dto.startDate)
+      : existing.startDate;
     const endDate = dto.endDate ? new Date(dto.endDate) : existing.endDate;
 
-    this.ensureDateRange(startDate, endDate, 'Holiday end date must be after start date');
+    this.ensureDateRange(
+      startDate,
+      endDate,
+      'Holiday end date must be after start date',
+    );
 
     return this.prisma.holiday.update({
       where: { id },
@@ -101,15 +142,18 @@ export class HolidayService {
         name,
         startDate,
         endDate,
-        ...(dto.affectsSalary !== undefined ? { affectsSalary: dto.affectsSalary } : {}),
+        ...(dto.affectsSalary !== undefined
+          ? { affectsSalary: dto.affectsSalary }
+          : {}),
         ...(dto.note !== undefined ? { note: trimToNull(dto.note) } : {}),
         updatedById: actor.sub,
       },
     });
   }
 
-  async delete(id: string) {
-    await this.findHolidayByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const holiday = await this.findHolidayByIdOrThrow(id);
+    assertWithinScope(actor, holiday);
 
     await this.prisma.holiday.delete({
       where: { id },
@@ -164,7 +208,9 @@ export class HolidayService {
     }
 
     if (branch.companyId !== companyId) {
-      throw new ConflictException('Branch does not belong to the selected company');
+      throw new ConflictException(
+        'Branch does not belong to the selected company',
+      );
     }
 
     return branch.id;
@@ -180,7 +226,11 @@ export class HolidayService {
     return normalized;
   }
 
-  private ensureDateRange(startDate: Date, endDate: Date, message: string): void {
+  private ensureDateRange(
+    startDate: Date,
+    endDate: Date,
+    message: string,
+  ): void {
     if (endDate < startDate) {
       throw new BadRequestException(message);
     }

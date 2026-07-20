@@ -13,9 +13,12 @@ import { Type } from 'class-transformer';
 import { IsInt } from 'class-validator';
 
 export class CreateBranchDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description: 'Required for superadmin; auto-filled for admin',
+  })
+  @IsOptional()
   @IsUUID()
-  companyId!: string;
+  companyId?: string;
 
   @ApiProperty({
     example: 'Main Branch',

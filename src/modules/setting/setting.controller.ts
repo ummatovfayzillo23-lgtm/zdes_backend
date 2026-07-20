@@ -11,6 +11,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateSettingDto } from './dto/create-setting.dto';
 import { SettingQueryDto } from './dto/setting-query.dto';
 import { UpdateSettingDto } from './dto/update-setting.dto';
@@ -25,31 +27,47 @@ export class SettingController {
 
   @Post()
   @ApiOperation({ summary: 'Create setting - superadmin, admin' })
-  create(@Body() dto: CreateSettingDto) {
-    return this.settingService.create(dto);
+  create(
+    @Body() dto: CreateSettingDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.settingService.create(dto, actor);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get settings - superadmin, admin' })
-  findAll(@Query() query: SettingQueryDto) {
-    return this.settingService.findAll(query);
+  findAll(
+    @Query() query: SettingQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.settingService.findAll(query, actor);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get setting by id - superadmin, admin' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.settingService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.settingService.findOne(id, actor);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update setting - superadmin, admin' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSettingDto) {
-    return this.settingService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateSettingDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.settingService.update(id, dto, actor);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete setting - superadmin, admin' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.settingService.delete(id);
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.settingService.delete(id, actor);
   }
 }

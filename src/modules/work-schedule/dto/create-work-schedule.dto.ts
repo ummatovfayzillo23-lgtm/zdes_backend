@@ -16,9 +16,13 @@ import {
 } from 'class-validator';
 
 export class CreateWorkScheduleDto {
-  @ApiProperty({ example: 'uuid-company-id' })
+  @ApiPropertyOptional({
+    example: 'uuid-company-id',
+    description: 'Required for superadmin; auto-filled for admin',
+  })
+  @IsOptional()
   @IsUUID()
-  companyId!: string;
+  companyId?: string;
 
   @ApiPropertyOptional({ example: 'uuid-branch-id' })
   @IsOptional()
@@ -68,7 +72,8 @@ export class CreateWorkScheduleDto {
 
   @ApiPropertyOptional({
     example: 'uuid-user-id',
-    description: 'If provided, this schedule is immediately assigned to the user',
+    description:
+      'If provided, this schedule is immediately assigned to the user',
   })
   @IsOptional()
   @IsUUID()

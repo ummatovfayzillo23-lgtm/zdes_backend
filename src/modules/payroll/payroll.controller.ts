@@ -27,20 +27,29 @@ export class PayrollController {
 
   @Post()
   @ApiOperation({ summary: 'Create payroll - superadmin, admin, manager' })
-  create(@Body() dto: CreatePayrollDto, @CurrentUser() actor: AccessTokenPayload) {
+  create(
+    @Body() dto: CreatePayrollDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
     return this.payrollService.create(dto, actor);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get payrolls - superadmin, admin, manager' })
-  findAll(@Query() query: PayrollQueryDto) {
-    return this.payrollService.findAll(query);
+  findAll(
+    @Query() query: PayrollQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.payrollService.findAll(query, actor);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get payroll by id - superadmin, admin, manager' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.payrollService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.payrollService.findOne(id, actor);
   }
 
   @Patch(':id')
@@ -55,7 +64,10 @@ export class PayrollController {
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete payroll - superadmin, admin, manager' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.payrollService.delete(id);
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.payrollService.delete(id, actor);
   }
 }

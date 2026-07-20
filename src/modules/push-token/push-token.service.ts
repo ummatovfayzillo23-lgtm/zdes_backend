@@ -1,7 +1,16 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+} from '../../common/utils/scope.util';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreatePushTokenDto } from './dto/create-push-token.dto';
 import { PushTokenQueryDto } from './dto/push-token-query.dto';
 import { UpdatePushTokenDto } from './dto/update-push-token.dto';
@@ -10,8 +19,8 @@ import { UpdatePushTokenDto } from './dto/update-push-token.dto';
 export class PushTokenService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreatePushTokenDto) {
-    const userId = await this.ensureUserExists(dto.userId);
+  async create(dto: CreatePushTokenDto, actor: AccessTokenPayload) {
+    const userId = await this.ensureUserInScope(dto.userId, actor);
     const token = this.normalizeRequired(dto.token, 'Push token is required');
     await this.ensureUniqueToken(token);
 
@@ -27,15 +36,26 @@ export class PushTokenService {
     });
   }
 
-  async findAll(query: PushTokenQueryDto) {
+  async findAll(query: PushTokenQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor);
 
     const where: Prisma.PushTokenWhereInput = {
       ...(query.userId ? { userId: query.userId } : {}),
-      ...(trimToNull(query.platform) ? { platform: trimToNull(query.platform) as string } : {}),
+      ...(scope.companyId
+        ? {
+            user: {
+              companyId: scope.companyId,
+              ...(scope.branchId ? { branchId: scope.branchId } : {}),
+            },
+          }
+        : {}),
+      ...(trimToNull(query.platform)
+        ? { platform: trimToNull(query.platform) }
+        : {}),
       ...(search
         ? {
             OR: [
@@ -57,18 +77,33 @@ export class PushTokenService {
       this.prisma.pushToken.count({ where }),
     ]);
 
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
-  async findOne(id: string) {
-    return this.findPushTokenByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const pushToken = await this.findPushTokenByIdOrThrow(id);
+    await this.assertPushTokenInScope(actor, pushToken);
+    return pushToken;
   }
 
-  async update(id: string, dto: UpdatePushTokenDto) {
-    await this.findPushTokenByIdOrThrow(id);
-    const userId = dto.userId !== undefined ? await this.ensureUserExists(dto.userId) : undefined;
+  async update(id: string, dto: UpdatePushTokenDto, actor: AccessTokenPayload) {
+    const existing = await this.findPushTokenByIdOrThrow(id);
+    await this.assertPushTokenInScope(actor, existing);
+
+    const userId =
+      dto.userId !== undefined
+        ? await this.ensureUserInScope(dto.userId, actor)
+        : undefined;
     const token =
-      dto.token !== undefined ? this.normalizeRequired(dto.token, 'Push token is required') : undefined;
+      dto.token !== undefined
+        ? this.normalizeRequired(dto.token, 'Push token is required')
+        : undefined;
 
     if (token) {
       await this.ensureUniqueToken(token, id);
@@ -79,9 +114,15 @@ export class PushTokenService {
       data: {
         ...(userId !== undefined ? { userId } : {}),
         ...(token !== undefined ? { token } : {}),
-        ...(dto.platform !== undefined ? { platform: trimToNull(dto.platform) } : {}),
-        ...(dto.deviceId !== undefined ? { deviceId: trimToNull(dto.deviceId) } : {}),
-        ...(dto.deviceName !== undefined ? { deviceName: trimToNull(dto.deviceName) } : {}),
+        ...(dto.platform !== undefined
+          ? { platform: trimToNull(dto.platform) }
+          : {}),
+        ...(dto.deviceId !== undefined
+          ? { deviceId: trimToNull(dto.deviceId) }
+          : {}),
+        ...(dto.deviceName !== undefined
+          ? { deviceName: trimToNull(dto.deviceName) }
+          : {}),
         ...(dto.lastSeenAt !== undefined
           ? { lastSeenAt: dto.lastSeenAt ? new Date(dto.lastSeenAt) : null }
           : {}),
@@ -89,8 +130,9 @@ export class PushTokenService {
     });
   }
 
-  async delete(id: string) {
-    await this.findPushTokenByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const pushToken = await this.findPushTokenByIdOrThrow(id);
+    await this.assertPushTokenInScope(actor, pushToken);
     await this.prisma.pushToken.delete({ where: { id } });
     return { success: true as const, id };
   }
@@ -103,14 +145,33 @@ export class PushTokenService {
     return pushToken;
   }
 
-  private async ensureUserExists(userId: string) {
+  private async assertPushTokenInScope(
+    actor: AccessTokenPayload,
+    pushToken: { userId: string },
+  ): Promise<void> {
+    if (actor.role === 'superadmin') {
+      return;
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: pushToken.userId },
+      select: { companyId: true, branchId: true },
+    });
+    assertWithinScope(actor, user ?? { companyId: null, branchId: null });
+  }
+
+  private async ensureUserInScope(
+    userId: string,
+    actor: AccessTokenPayload,
+  ): Promise<string> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true },
+      select: { id: true, companyId: true, branchId: true },
     });
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    assertWithinScope(actor, user);
     return user.id;
   }
 

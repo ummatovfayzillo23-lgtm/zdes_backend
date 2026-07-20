@@ -1,12 +1,20 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class CreatePositionDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'uuid-company-id',
+    description: 'Required for superadmin; auto-filled for admin',
   })
+  @IsOptional()
   @IsUUID()
-  companyId!: string;
+  companyId?: string;
 
   @ApiPropertyOptional({
     example: 'uuid-department-id',

@@ -6,6 +6,12 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { AssignUserDto } from './dto/assign-user.dto';
 import { CreateWorkScheduleDto } from './dto/create-work-schedule.dto';
 import { ToggleWorkScheduleStatusDto } from './dto/toggle-work-schedule-status.dto';
@@ -16,25 +22,29 @@ import { WorkScheduleQueryDto } from './dto/work-schedule-query.dto';
 export class WorkScheduleService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateWorkScheduleDto) {
-    await this.ensureCompanyExists(dto.companyId);
-    if (dto.branchId) await this.ensureBranchBelongsToCompany(dto.branchId, dto.companyId);
+  async create(dto: CreateWorkScheduleDto, actor: AccessTokenPayload) {
+    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    await this.ensureCompanyExists(companyId);
+    if (dto.branchId)
+      await this.ensureBranchBelongsToCompany(dto.branchId, companyId);
 
     const normalizedName = this.normalizeRequiredName(dto.name);
-    await this.ensureNameIsUnique(dto.companyId, normalizedName);
+    await this.ensureNameIsUnique(companyId, normalizedName);
 
     if (dto.userId) {
       const user = await this.findUserOrThrow(dto.userId);
-      if (user.companyId && user.companyId !== dto.companyId) {
-        throw new ConflictException('User does not belong to the selected company');
+      if (user.companyId && user.companyId !== companyId) {
+        throw new ConflictException(
+          'User does not belong to the selected company',
+        );
       }
     }
 
-    if (dto.isDefault) await this.clearDefaultForCompany(dto.companyId);
+    if (dto.isDefault) await this.clearDefaultForCompany(companyId);
 
     const workSchedule = await this.prisma.workSchedule.create({
       data: {
-        companyId: dto.companyId,
+        companyId,
         branchId: dto.branchId ?? null,
         name: normalizedName,
         startTime: dto.startTime,
@@ -55,18 +65,24 @@ export class WorkScheduleService {
     return workSchedule;
   }
 
-  async findAll(query: WorkScheduleQueryDto) {
+  async findAll(query: WorkScheduleQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+      branchId: query.branchId,
+    });
 
     const where: Prisma.WorkScheduleWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
-      ...(query.branchId ? { branchId: query.branchId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { branchId: scope.branchId } : {}),
       ...(query.isDefault !== undefined ? { isDefault: query.isDefault } : {}),
       ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
-      ...(search ? { OR: [{ name: { contains: search, mode: 'insensitive' } }] } : {}),
+      ...(search
+        ? { OR: [{ name: { contains: search, mode: 'insensitive' } }] }
+        : {}),
     };
 
     const [items, total] = await this.prisma.$transaction([
@@ -88,19 +104,33 @@ export class WorkScheduleService {
     };
   }
 
-  async findOne(id: string) {
-    return this.findWorkScheduleByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const ws = await this.findWorkScheduleByIdOrThrow(id);
+    assertWithinScope(actor, ws);
+    return ws;
   }
 
-  async update(id: string, dto: UpdateWorkScheduleDto) {
+  async update(
+    id: string,
+    dto: UpdateWorkScheduleDto,
+    actor: AccessTokenPayload,
+  ) {
     const existing = await this.findWorkScheduleByIdOrThrow(id);
-    const companyId = dto.companyId ?? existing.companyId;
+    assertWithinScope(actor, existing);
 
-    if (dto.companyId) await this.ensureCompanyExists(dto.companyId);
-    if (dto.branchId) await this.ensureBranchBelongsToCompany(dto.branchId, companyId);
+    const companyId = dto.companyId
+      ? resolveScopedCompanyId(actor, dto.companyId)
+      : existing.companyId;
 
-    const normalizedName = dto.name ? this.normalizeRequiredName(dto.name) : existing.name;
-    if (dto.name || dto.companyId) await this.ensureNameIsUnique(companyId, normalizedName, id);
+    if (dto.companyId) await this.ensureCompanyExists(companyId);
+    if (dto.branchId)
+      await this.ensureBranchBelongsToCompany(dto.branchId, companyId);
+
+    const normalizedName = dto.name
+      ? this.normalizeRequiredName(dto.name)
+      : existing.name;
+    if (dto.name || dto.companyId)
+      await this.ensureNameIsUnique(companyId, normalizedName, id);
 
     if (dto.isDefault === true && !existing.isDefault) {
       await this.clearDefaultForCompany(companyId, id);
@@ -109,20 +139,29 @@ export class WorkScheduleService {
     return this.prisma.workSchedule.update({
       where: { id },
       data: {
-        ...(dto.companyId ? { companyId: dto.companyId } : {}),
-        ...(dto.branchId !== undefined ? { branchId: dto.branchId ?? null } : {}),
+        ...(dto.companyId ? { companyId } : {}),
+        ...(dto.branchId !== undefined
+          ? { branchId: dto.branchId ?? null }
+          : {}),
         ...(dto.name ? { name: normalizedName } : {}),
         ...(dto.startTime ? { startTime: dto.startTime } : {}),
         ...(dto.endTime ? { endTime: dto.endTime } : {}),
         ...(dto.workDays ? { workDays: dto.workDays } : {}),
-        ...(dto.graceMinutes !== undefined ? { graceMinutes: dto.graceMinutes } : {}),
+        ...(dto.graceMinutes !== undefined
+          ? { graceMinutes: dto.graceMinutes }
+          : {}),
         ...(dto.isDefault !== undefined ? { isDefault: dto.isDefault } : {}),
       },
     });
   }
 
-  async toggleStatus(id: string, dto: ToggleWorkScheduleStatusDto) {
+  async toggleStatus(
+    id: string,
+    dto: ToggleWorkScheduleStatusDto,
+    actor: AccessTokenPayload,
+  ) {
     const ws = await this.findWorkScheduleByIdOrThrow(id);
+    assertWithinScope(actor, ws);
     const nextIsActive = dto.isActive ?? !ws.isActive;
 
     return this.prisma.workSchedule.update({
@@ -131,8 +170,9 @@ export class WorkScheduleService {
     });
   }
 
-  async setDefault(id: string) {
+  async setDefault(id: string, actor: AccessTokenPayload) {
     const ws = await this.findWorkScheduleByIdOrThrow(id);
+    assertWithinScope(actor, ws);
 
     await this.clearDefaultForCompany(ws.companyId, id);
 
@@ -142,12 +182,16 @@ export class WorkScheduleService {
     });
   }
 
-  async assignUser(id: string, dto: AssignUserDto) {
+  async assignUser(id: string, dto: AssignUserDto, actor: AccessTokenPayload) {
     const ws = await this.findWorkScheduleByIdOrThrow(id);
+    assertWithinScope(actor, ws);
     const user = await this.findUserOrThrow(dto.userId);
+    assertWithinScope(actor, user);
 
     if (user.companyId && user.companyId !== ws.companyId) {
-      throw new ConflictException('Work schedule does not belong to the user\'s company');
+      throw new ConflictException(
+        "Work schedule does not belong to the user's company",
+      );
     }
 
     return this.prisma.user.update({
@@ -157,8 +201,15 @@ export class WorkScheduleService {
     });
   }
 
-  async unassignUser(dto: AssignUserDto) {
-    await this.findUserOrThrow(dto.userId);
+  async unassignUser(
+    id: string,
+    dto: AssignUserDto,
+    actor: AccessTokenPayload,
+  ) {
+    const ws = await this.findWorkScheduleByIdOrThrow(id);
+    assertWithinScope(actor, ws);
+    const user = await this.findUserOrThrow(dto.userId);
+    assertWithinScope(actor, user);
 
     return this.prisma.user.update({
       where: { id: dto.userId },
@@ -167,8 +218,9 @@ export class WorkScheduleService {
     });
   }
 
-  async delete(id: string) {
-    await this.findWorkScheduleByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const ws = await this.findWorkScheduleByIdOrThrow(id);
+    assertWithinScope(actor, ws);
     await this.prisma.workSchedule.delete({ where: { id } });
     return { success: true as const, id };
   }
@@ -176,7 +228,13 @@ export class WorkScheduleService {
   private async findUserOrThrow(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, login: true, companyId: true, workScheduleId: true },
+      select: {
+        id: true,
+        login: true,
+        companyId: true,
+        branchId: true,
+        workScheduleId: true,
+      },
     });
     if (!user) throw new NotFoundException('User not found');
     return user;
@@ -196,14 +254,19 @@ export class WorkScheduleService {
     if (!company) throw new NotFoundException('Company not found');
   }
 
-  private async ensureBranchBelongsToCompany(branchId: string, companyId: string): Promise<void> {
+  private async ensureBranchBelongsToCompany(
+    branchId: string,
+    companyId: string,
+  ): Promise<void> {
     const branch = await this.prisma.branch.findUnique({
       where: { id: branchId },
       select: { id: true, companyId: true },
     });
     if (!branch) throw new NotFoundException('Branch not found');
     if (branch.companyId !== companyId) {
-      throw new ConflictException('Branch does not belong to the selected company');
+      throw new ConflictException(
+        'Branch does not belong to the selected company',
+      );
     }
   }
 
@@ -213,12 +276,22 @@ export class WorkScheduleService {
     excludedId?: string,
   ): Promise<void> {
     const existing = await this.prisma.workSchedule.findFirst({
-      where: { companyId, name, ...(excludedId ? { id: { not: excludedId } } : {}) },
+      where: {
+        companyId,
+        name,
+        ...(excludedId ? { id: { not: excludedId } } : {}),
+      },
     });
-    if (existing) throw new ConflictException('Work schedule name already exists for this company');
+    if (existing)
+      throw new ConflictException(
+        'Work schedule name already exists for this company',
+      );
   }
 
-  private async clearDefaultForCompany(companyId: string, excludedId?: string): Promise<void> {
+  private async clearDefaultForCompany(
+    companyId: string,
+    excludedId?: string,
+  ): Promise<void> {
     await this.prisma.workSchedule.updateMany({
       where: {
         companyId,
@@ -231,7 +304,8 @@ export class WorkScheduleService {
 
   private normalizeRequiredName(name: string): string {
     const normalized = trimToNull(name);
-    if (!normalized) throw new ConflictException('Work schedule name is required');
+    if (!normalized)
+      throw new ConflictException('Work schedule name is required');
     return normalized;
   }
 }

@@ -1,11 +1,18 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreatePositionDto } from './dto/create-position.dto';
 import { PositionQueryDto } from './dto/position-query.dto';
 import { TogglePositionStatusDto } from './dto/toggle-position-status.dto';
@@ -15,32 +22,50 @@ import { UpdatePositionDto } from './dto/update-position.dto';
 export class PositionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreatePositionDto) {
-    await this.ensureCompanyExists(dto.companyId);
-    const departmentId = await this.resolveDepartmentId(dto.companyId, dto.departmentId);
+  async create(dto: CreatePositionDto, actor: AccessTokenPayload) {
+    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    await this.ensureCompanyExists(companyId);
+
+    if (actor.role === 'manager' && !dto.departmentId) {
+      throw new ForbiddenException(
+        'departmentId is required to create a position within your branch',
+      );
+    }
+
+    const departmentId = await this.resolveDepartmentId(
+      companyId,
+      dto.departmentId,
+      actor,
+    );
     const normalizedName = this.normalizeRequiredName(dto.name);
-    await this.ensureNameIsUnique(dto.companyId, departmentId, normalizedName);
+    await this.ensureNameIsUnique(companyId, departmentId, normalizedName);
 
     return this.prisma.position.create({
       data: {
-        companyId: dto.companyId,
+        companyId,
         departmentId,
         name: normalizedName,
       },
     });
   }
 
-  async findAll(query: PositionQueryDto) {
+  async findAll(query: PositionQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+    });
 
     const where: Prisma.PositionWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
+      ...(scope.branchId ? { department: { branchId: scope.branchId } } : {}),
       ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
-      ...(search ? { OR: [{ name: { contains: search, mode: 'insensitive' } }] } : {}),
+      ...(search
+        ? { OR: [{ name: { contains: search, mode: 'insensitive' } }] }
+        : {}),
     };
 
     const [items, total] = await this.prisma.$transaction([
@@ -62,23 +87,38 @@ export class PositionService {
     };
   }
 
-  async findOne(id: string) {
-    return this.findPositionByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const position = await this.findPositionByIdOrThrow(id);
+    assertWithinScope(actor, position);
+    await this.assertManagerBranchAccess(actor, position.departmentId);
+    return position;
   }
 
-  async update(id: string, dto: UpdatePositionDto) {
+  async update(id: string, dto: UpdatePositionDto, actor: AccessTokenPayload) {
     const existing = await this.findPositionByIdOrThrow(id);
+    assertWithinScope(actor, existing);
+    await this.assertManagerBranchAccess(actor, existing.departmentId);
 
-    const companyId = dto.companyId
-      ? (await this.ensureCompanyExists(dto.companyId), dto.companyId)
-      : existing.companyId;
+    let companyId = existing.companyId;
+    if (dto.companyId) {
+      companyId = resolveScopedCompanyId(actor, dto.companyId);
+      await this.ensureCompanyExists(companyId);
+    }
+
+    if (actor.role === 'manager' && dto.departmentId === null) {
+      throw new ForbiddenException(
+        'departmentId is required to keep a position within your branch',
+      );
+    }
 
     const departmentId =
       dto.departmentId !== undefined
-        ? await this.resolveDepartmentId(companyId, dto.departmentId)
+        ? await this.resolveDepartmentId(companyId, dto.departmentId, actor)
         : existing.departmentId;
 
-    const normalizedName = dto.name ? this.normalizeRequiredName(dto.name) : existing.name;
+    const normalizedName = dto.name
+      ? this.normalizeRequiredName(dto.name)
+      : existing.name;
 
     await this.ensureNameIsUnique(companyId, departmentId, normalizedName, id);
 
@@ -88,8 +128,14 @@ export class PositionService {
     });
   }
 
-  async toggleStatus(id: string, dto: TogglePositionStatusDto) {
+  async toggleStatus(
+    id: string,
+    dto: TogglePositionStatusDto,
+    actor: AccessTokenPayload,
+  ) {
     const position = await this.findPositionByIdOrThrow(id);
+    assertWithinScope(actor, position);
+    await this.assertManagerBranchAccess(actor, position.departmentId);
     const nextIsActive = dto.isActive ?? !position.isActive;
 
     return this.prisma.position.update({
@@ -98,8 +144,10 @@ export class PositionService {
     });
   }
 
-  async delete(id: string) {
-    await this.findPositionByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const position = await this.findPositionByIdOrThrow(id);
+    assertWithinScope(actor, position);
+    await this.assertManagerBranchAccess(actor, position.departmentId);
     await this.prisma.position.delete({ where: { id } });
     return { success: true as const, id };
   }
@@ -120,19 +168,48 @@ export class PositionService {
 
   private async resolveDepartmentId(
     companyId: string,
-    departmentId?: string | null,
+    departmentId: string | null | undefined,
+    actor: AccessTokenPayload,
   ): Promise<string | null> {
     if (departmentId == null) return null;
 
     const department = await this.prisma.department.findUnique({
       where: { id: departmentId },
-      select: { id: true, companyId: true },
+      select: { id: true, companyId: true, branchId: true },
     });
     if (!department) throw new NotFoundException('Department not found');
     if (department.companyId !== companyId) {
-      throw new ConflictException('Department does not belong to the selected company');
+      throw new ConflictException(
+        'Department does not belong to the selected company',
+      );
+    }
+    if (actor.role === 'manager' && department.branchId !== actor.branchId) {
+      throw new ForbiddenException(
+        "You cannot access another branch's department",
+      );
     }
     return department.id;
+  }
+
+  private async assertManagerBranchAccess(
+    actor: AccessTokenPayload,
+    departmentId: string | null,
+  ): Promise<void> {
+    if (actor.role !== 'manager') return;
+
+    if (!departmentId) {
+      throw new ForbiddenException(
+        "You cannot access a position outside your branch",
+      );
+    }
+
+    const department = await this.prisma.department.findUnique({
+      where: { id: departmentId },
+      select: { branchId: true },
+    });
+    if (!department || department.branchId !== actor.branchId) {
+      throw new ForbiddenException("You cannot access another branch's data");
+    }
   }
 
   private async ensureNameIsUnique(
@@ -150,7 +227,9 @@ export class PositionService {
       },
     });
     if (existing) {
-      throw new ConflictException('Position name already exists for this company and department');
+      throw new ConflictException(
+        'Position name already exists for this company and department',
+      );
     }
   }
 

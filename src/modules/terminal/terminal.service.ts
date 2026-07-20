@@ -6,6 +6,12 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateTerminalDto } from './dto/create-terminal.dto';
 import { TerminalQueryDto } from './dto/terminal-query.dto';
 import { UpdateTerminalDto } from './dto/update-terminal.dto';
@@ -14,11 +20,19 @@ import { UpdateTerminalDto } from './dto/update-terminal.dto';
 export class TerminalService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateTerminalDto) {
-    const companyId = await this.ensureCompanyExists(dto.companyId);
-    const branchId = await this.resolveBranchId(companyId, dto.branchId);
+  async create(dto: CreateTerminalDto, actor: AccessTokenPayload) {
+    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId,
+      branchId: dto.branchId,
+    });
+    await this.ensureCompanyExists(companyId);
+    const branchId = await this.resolveBranchId(companyId, scope.branchId);
     const name = this.normalizeRequired(dto.name, 'Terminal name is required');
-    const serialNumber = this.normalizeRequired(dto.serialNumber, 'Serial number is required');
+    const serialNumber = this.normalizeRequired(
+      dto.serialNumber,
+      'Serial number is required',
+    );
 
     await this.ensureSerialNumberUnique(serialNumber);
 
@@ -32,21 +46,27 @@ export class TerminalService {
         port: dto.port,
         type: dto.type,
         status: dto.status,
-        connectionConfig: dto.connectionConfig as Prisma.InputJsonValue | undefined,
+        connectionConfig: dto.connectionConfig as
+          | Prisma.InputJsonValue
+          | undefined,
         lastSyncAt: dto.lastSyncAt ? new Date(dto.lastSyncAt) : undefined,
       },
     });
   }
 
-  async findAll(query: TerminalQueryDto) {
+  async findAll(query: TerminalQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+      branchId: query.branchId,
+    });
 
     const where: Prisma.TerminalWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
-      ...(query.branchId ? { branchId: query.branchId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { branchId: scope.branchId } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(search
@@ -69,20 +89,41 @@ export class TerminalService {
       this.prisma.terminal.count({ where }),
     ]);
 
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
-  async findOne(id: string) {
-    return this.findTerminalByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const terminal = await this.findTerminalByIdOrThrow(id);
+    assertWithinScope(actor, terminal);
+    return terminal;
   }
 
-  async update(id: string, dto: UpdateTerminalDto) {
+  async update(id: string, dto: UpdateTerminalDto, actor: AccessTokenPayload) {
     const existing = await this.findTerminalByIdOrThrow(id);
+    assertWithinScope(actor, existing);
+
     const companyId =
-      dto.companyId !== undefined ? await this.ensureCompanyExists(dto.companyId) : existing.companyId;
+      dto.companyId !== undefined
+        ? resolveScopedCompanyId(actor, dto.companyId)
+        : existing.companyId;
+    if (dto.companyId !== undefined) await this.ensureCompanyExists(companyId);
+
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId,
+      branchId:
+        dto.branchId !== undefined
+          ? dto.branchId
+          : (existing.branchId ?? undefined),
+    });
     const branchId =
       dto.branchId !== undefined
-        ? await this.resolveBranchId(companyId, dto.branchId)
+        ? await this.resolveBranchId(companyId, scope.branchId)
         : await this.resolveBranchId(companyId, existing.branchId);
     const serialNumber =
       dto.serialNumber !== undefined
@@ -97,10 +138,17 @@ export class TerminalService {
         companyId,
         branchId,
         ...(dto.name !== undefined
-          ? { name: this.normalizeRequired(dto.name, 'Terminal name is required') }
+          ? {
+              name: this.normalizeRequired(
+                dto.name,
+                'Terminal name is required',
+              ),
+            }
           : {}),
         serialNumber,
-        ...(dto.ipAddress !== undefined ? { ipAddress: trimToNull(dto.ipAddress) } : {}),
+        ...(dto.ipAddress !== undefined
+          ? { ipAddress: trimToNull(dto.ipAddress) }
+          : {}),
         ...(dto.port !== undefined ? { port: dto.port } : {}),
         ...(dto.type !== undefined ? { type: dto.type } : {}),
         ...(dto.status !== undefined ? { status: dto.status } : {}),
@@ -114,8 +162,9 @@ export class TerminalService {
     });
   }
 
-  async delete(id: string) {
-    await this.findTerminalByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const terminal = await this.findTerminalByIdOrThrow(id);
+    assertWithinScope(actor, terminal);
     await this.prisma.terminal.delete({ where: { id } });
     return { success: true as const, id };
   }
@@ -154,13 +203,18 @@ export class TerminalService {
     }
 
     if (branch.companyId !== companyId) {
-      throw new ConflictException('Branch does not belong to the selected company');
+      throw new ConflictException(
+        'Branch does not belong to the selected company',
+      );
     }
 
     return branch.id;
   }
 
-  private async ensureSerialNumberUnique(serialNumber: string, excludedId?: string) {
+  private async ensureSerialNumberUnique(
+    serialNumber: string,
+    excludedId?: string,
+  ) {
     const terminal = await this.prisma.terminal.findFirst({
       where: {
         serialNumber,

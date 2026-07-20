@@ -11,6 +11,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
@@ -25,31 +27,49 @@ export class NotificationController {
 
   @Post()
   @ApiOperation({ summary: 'Create notification - superadmin, admin, manager' })
-  create(@Body() dto: CreateNotificationDto) {
-    return this.notificationService.create(dto);
+  create(
+    @Body() dto: CreateNotificationDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.notificationService.create(dto, actor);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get notifications - superadmin, admin, manager' })
-  findAll(@Query() query: NotificationQueryDto) {
-    return this.notificationService.findAll(query);
+  findAll(
+    @Query() query: NotificationQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.notificationService.findAll(query, actor);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get notification by id - superadmin, admin, manager' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.notificationService.findOne(id);
+  @ApiOperation({
+    summary: 'Get notification by id - superadmin, admin, manager',
+  })
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.notificationService.findOne(id, actor);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update notification - superadmin, admin, manager' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateNotificationDto) {
-    return this.notificationService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateNotificationDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.notificationService.update(id, dto, actor);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete notification - superadmin, admin, manager' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.notificationService.delete(id);
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.notificationService.delete(id, actor);
   }
 }

@@ -11,66 +11,125 @@ import {
   Query,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ToggleUserBlockedDto } from './dto/toggle-user-blocked.dto';
 import { ToggleUserStatusDto } from './dto/toggle-user-status.dto';
+import { UpdateOwnProfileDto } from './dto/update-own-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserQueryDto } from './dto/user-query.dto';
 import { UserService } from './user.service';
 
 @ApiTags('Users')
 @ApiBearerAuth()
-@Roles('superadmin')
 @Controller('users')
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create user - superadmin' })
-  create(@Body() dto: CreateUserDto) {
-    return this.userService.create(dto);
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'Create user - superadmin, admin (own company)' })
+  create(@Body() dto: CreateUserDto, @CurrentUser() actor: AccessTokenPayload) {
+    return this.userService.create(dto, actor);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get users - superadmin' })
-  findAll(@Query() query: UserQueryDto) {
-    return this.userService.findAll(query);
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({
+    summary:
+      'Get users - superadmin (all), admin (own company), manager (own branch employees)',
+  })
+  findAll(
+    @Query() query: UserQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.findAll(query, actor);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get user by id - superadmin' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.userService.findOne(id);
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'Get user by id - superadmin, admin, manager' })
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.findOne(id, actor);
+  }
+
+  @Patch('me')
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'Update own profile - superadmin, admin, manager' })
+  updateOwnProfile(
+    @Body() dto: UpdateOwnProfileDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.updateOwnProfile(actor, dto);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update user - superadmin' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateUserDto) {
-    return this.userService.update(id, dto);
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({
+    summary:
+      'Update user - superadmin, admin (own company), manager (own branch employees)',
+  })
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.update(id, dto, actor);
   }
 
   @Patch(':id/toggle-status')
-  @ApiOperation({ summary: 'Toggle user status - superadmin' })
-  toggleStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ToggleUserStatusDto) {
-    return this.userService.toggleStatus(id, dto);
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({
+    summary:
+      'Toggle user status - superadmin, admin, manager (own branch employees)',
+  })
+  toggleStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ToggleUserStatusDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.toggleStatus(id, dto, actor);
   }
 
   @Patch(':id/toggle-blocked')
-  @ApiOperation({ summary: 'Toggle user blocked state - superadmin' })
-  toggleBlocked(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ToggleUserBlockedDto) {
-    return this.userService.toggleBlocked(id, dto);
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({
+    summary:
+      'Toggle user blocked state - superadmin, admin, manager (own branch employees)',
+  })
+  toggleBlocked(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ToggleUserBlockedDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.toggleBlocked(id, dto, actor);
   }
 
   @Patch(':id/change-password')
-  @ApiOperation({ summary: 'Change user password - superadmin' })
-  changePassword(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ChangePasswordDto) {
-    return this.userService.changePassword(id, dto);
+  @Roles('superadmin', 'admin')
+  @ApiOperation({
+    summary: 'Change user password - superadmin, admin (own company)',
+  })
+  changePassword(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangePasswordDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.changePassword(id, dto, actor);
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete user - superadmin' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.userService.delete(id);
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'Delete user - superadmin, admin (own company)' })
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.userService.delete(id, actor);
   }
 }

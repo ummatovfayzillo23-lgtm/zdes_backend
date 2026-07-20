@@ -1,8 +1,4 @@
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   Body,
   Controller,
@@ -40,14 +36,20 @@ export class AdvanceController {
 
   @Get()
   @ApiOperation({ summary: 'Get advances - superadmin, admin, manager' })
-  findAll(@Query() query: AdvanceQueryDto) {
-    return this.advanceService.findAll(query);
+  findAll(
+    @Query() query: AdvanceQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.advanceService.findAll(query, actor);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get advance by id - superadmin, admin, manager' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.advanceService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.advanceService.findOne(id, actor);
   }
 
   @Patch(':id')
@@ -62,7 +64,10 @@ export class AdvanceController {
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete advance - superadmin, admin, manager' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.advanceService.delete(id);
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.advanceService.delete(id, actor);
   }
 }

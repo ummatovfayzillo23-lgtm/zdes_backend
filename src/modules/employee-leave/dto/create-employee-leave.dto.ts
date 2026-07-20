@@ -14,9 +14,12 @@ import {
 } from 'class-validator';
 
 export class CreateEmployeeLeaveDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description: 'Required for superadmin; auto-filled for admin/manager',
+  })
+  @IsOptional()
   @IsUUID()
-  companyId!: string;
+  companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

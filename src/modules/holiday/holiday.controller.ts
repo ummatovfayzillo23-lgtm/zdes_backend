@@ -36,14 +36,20 @@ export class HolidayController {
 
   @Get()
   @ApiOperation({ summary: 'Get holidays - superadmin, admin, manager' })
-  findAll(@Query() query: HolidayQueryDto) {
-    return this.holidayService.findAll(query);
+  findAll(
+    @Query() query: HolidayQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.holidayService.findAll(query, actor);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get holiday by id - superadmin, admin, manager' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.holidayService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.holidayService.findOne(id, actor);
   }
 
   @Patch(':id')
@@ -58,7 +64,10 @@ export class HolidayController {
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete holiday - superadmin, admin, manager' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.holidayService.delete(id);
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.holidayService.delete(id, actor);
   }
 }

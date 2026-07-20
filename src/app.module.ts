@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { CommonModule } from './common/common.module';
 import { AccessTokenGuard } from './common/guards/access-token.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
+import { RedisModule } from './common/redis/redis.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AdvanceModule } from './modules/advance/advance.module';
 import { AppVersionModule } from './modules/app-version/app-version.module';
@@ -27,6 +30,13 @@ import { WorkScheduleModule } from './modules/work-schedule/work-schedule.module
 
 @Module({
   imports: [
+    ThrottlerModule.forRoot([
+      {
+        ttl: Number(process.env.RATE_LIMIT_TTL_MS ?? 60_000),
+        limit: Number(process.env.RATE_LIMIT_MAX ?? 100),
+      },
+    ]),
+    RedisModule,
     CommonModule,
     AttendanceModule,
     AdvanceModule,
@@ -55,6 +65,10 @@ import { WorkScheduleModule } from './modules/work-schedule/work-schedule.module
     {
       provide: APP_GUARD,
       useClass: AccessTokenGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: UserThrottlerGuard,
     },
     {
       provide: APP_GUARD,

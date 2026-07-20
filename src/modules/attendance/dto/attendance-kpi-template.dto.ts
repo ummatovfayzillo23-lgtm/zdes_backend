@@ -1,11 +1,14 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
 
 export class AttendanceKpiTemplateDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description: 'Required for superadmin; auto-filled for admin',
+  })
+  @IsOptional()
   @IsUUID()
-  companyId!: string;
+  companyId?: string;
 
   @ApiPropertyOptional({ example: 1000, default: 0 })
   @IsOptional()

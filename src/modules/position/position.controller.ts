@@ -11,6 +11,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreatePositionDto } from './dto/create-position.dto';
 import { PositionQueryDto } from './dto/position-query.dto';
 import { TogglePositionStatusDto } from './dto/toggle-position-status.dto';
@@ -19,44 +21,74 @@ import { PositionService } from './position.service';
 
 @ApiTags('Positions')
 @ApiBearerAuth()
-@Roles('superadmin')
+@Roles('superadmin', 'admin', 'manager')
 @Controller('positions')
 export class PositionController {
   constructor(private readonly positionService: PositionService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create position - superadmin' })
-  create(@Body() dto: CreatePositionDto) {
-    return this.positionService.create(dto);
+  @ApiOperation({
+    summary:
+      'Create position - superadmin, admin (own company), manager (own branch, departmentId required)',
+  })
+  create(
+    @Body() dto: CreatePositionDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.positionService.create(dto, actor);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get positions - superadmin' })
-  findAll(@Query() query: PositionQueryDto) {
-    return this.positionService.findAll(query);
+  @ApiOperation({
+    summary:
+      'Get positions - superadmin (all), admin (own company), manager (own branch)',
+  })
+  findAll(
+    @Query() query: PositionQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.positionService.findAll(query, actor);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get position by id - superadmin' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.positionService.findOne(id);
+  @ApiOperation({
+    summary: 'Get position by id - superadmin, admin, manager',
+  })
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.positionService.findOne(id, actor);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update position - superadmin' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdatePositionDto) {
-    return this.positionService.update(id, dto);
+  @ApiOperation({ summary: 'Update position - superadmin, admin, manager' })
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdatePositionDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.positionService.update(id, dto, actor);
   }
 
   @Patch(':id/toggle-status')
-  @ApiOperation({ summary: 'Toggle position status - superadmin' })
-  toggleStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TogglePositionStatusDto) {
-    return this.positionService.toggleStatus(id, dto);
+  @ApiOperation({
+    summary: 'Toggle position status - superadmin, admin, manager',
+  })
+  toggleStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TogglePositionStatusDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.positionService.toggleStatus(id, dto, actor);
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete position - superadmin' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.positionService.delete(id);
+  @ApiOperation({ summary: 'Delete position - superadmin, admin, manager' })
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.positionService.delete(id, actor);
   }
 }

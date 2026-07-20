@@ -23,28 +23,47 @@ import { SalaryAdjustmentService } from './salary-adjustment.service';
 @Roles('superadmin', 'admin', 'manager')
 @Controller('salary-adjustments')
 export class SalaryAdjustmentController {
-  constructor(private readonly salaryAdjustmentService: SalaryAdjustmentService) {}
+  constructor(
+    private readonly salaryAdjustmentService: SalaryAdjustmentService,
+  ) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create salary adjustment - superadmin, admin, manager' })
-  create(@Body() dto: CreateSalaryAdjustmentDto, @CurrentUser() actor: AccessTokenPayload) {
+  @ApiOperation({
+    summary: 'Create salary adjustment - superadmin, admin, manager',
+  })
+  create(
+    @Body() dto: CreateSalaryAdjustmentDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
     return this.salaryAdjustmentService.create(dto, actor);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get salary adjustments - superadmin, admin, manager' })
-  findAll(@Query() query: SalaryAdjustmentQueryDto) {
-    return this.salaryAdjustmentService.findAll(query);
+  @ApiOperation({
+    summary: 'Get salary adjustments - superadmin, admin, manager',
+  })
+  findAll(
+    @Query() query: SalaryAdjustmentQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.salaryAdjustmentService.findAll(query, actor);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get salary adjustment by id - superadmin, admin, manager' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.salaryAdjustmentService.findOne(id);
+  @ApiOperation({
+    summary: 'Get salary adjustment by id - superadmin, admin, manager',
+  })
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.salaryAdjustmentService.findOne(id, actor);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update salary adjustment - superadmin, admin, manager' })
+  @ApiOperation({
+    summary: 'Update salary adjustment - superadmin, admin, manager',
+  })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSalaryAdjustmentDto,
@@ -54,8 +73,13 @@ export class SalaryAdjustmentController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete salary adjustment - superadmin, admin, manager' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.salaryAdjustmentService.delete(id);
+  @ApiOperation({
+    summary: 'Delete salary adjustment - superadmin, admin, manager',
+  })
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.salaryAdjustmentService.delete(id, actor);
   }
 }

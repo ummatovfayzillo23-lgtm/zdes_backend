@@ -26,7 +26,9 @@ export class EmployeeLeaveController {
   constructor(private readonly employeeLeaveService: EmployeeLeaveService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create employee leave - superadmin, admin, manager' })
+  @ApiOperation({
+    summary: 'Create employee leave - superadmin, admin, manager',
+  })
   create(
     @Body() dto: CreateEmployeeLeaveDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -36,18 +38,28 @@ export class EmployeeLeaveController {
 
   @Get()
   @ApiOperation({ summary: 'Get employee leaves - superadmin, admin, manager' })
-  findAll(@Query() query: EmployeeLeaveQueryDto) {
-    return this.employeeLeaveService.findAll(query);
+  findAll(
+    @Query() query: EmployeeLeaveQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.employeeLeaveService.findAll(query, actor);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get employee leave by id - superadmin, admin, manager' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.employeeLeaveService.findOne(id);
+  @ApiOperation({
+    summary: 'Get employee leave by id - superadmin, admin, manager',
+  })
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.employeeLeaveService.findOne(id, actor);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update employee leave - superadmin, admin, manager' })
+  @ApiOperation({
+    summary: 'Update employee leave - superadmin, admin, manager',
+  })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateEmployeeLeaveDto,
@@ -57,8 +69,13 @@ export class EmployeeLeaveController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete employee leave - superadmin, admin, manager' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.employeeLeaveService.delete(id);
+  @ApiOperation({
+    summary: 'Delete employee leave - superadmin, admin, manager',
+  })
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.employeeLeaveService.delete(id, actor);
   }
 }

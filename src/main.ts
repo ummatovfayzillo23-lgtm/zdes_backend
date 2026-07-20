@@ -3,6 +3,10 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { HttpCacheInterceptor } from './common/interceptors/http-cache.interceptor';
+import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { CacheService } from './common/redis/cache.service';
 
 const API_PREFIX = 'api/v1';
 const SWAGGER_PATH = 'docs';
@@ -15,6 +19,11 @@ async function bootstrap() {
   const host = process.env.HOST ?? 'localhost';
 
   app.setGlobalPrefix(API_PREFIX);
+  app.useGlobalFilters(new GlobalExceptionFilter());
+  app.useGlobalInterceptors(
+    new ResponseInterceptor(),
+    new HttpCacheInterceptor(app.get(CacheService)),
+  );
   app.enableCors({
     origin: true,
     credentials: true,

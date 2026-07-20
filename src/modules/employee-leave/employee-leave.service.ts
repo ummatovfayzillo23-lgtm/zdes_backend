@@ -7,6 +7,11 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateEmployeeLeaveDto } from './dto/create-employee-leave.dto';
 import { EmployeeLeaveQueryDto } from './dto/employee-leave-query.dto';
@@ -17,16 +22,30 @@ export class EmployeeLeaveService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateEmployeeLeaveDto, actor: AccessTokenPayload) {
-    const companyId = await this.ensureCompanyExists(dto.companyId);
-    const branchId = await this.resolveBranchId(companyId, dto.branchId);
-    const employee = await this.ensureEmployeeBelongsToCompany(dto.employeeId, companyId);
+    const scopedCompanyId = resolveScopedCompanyId(actor, dto.companyId);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: scopedCompanyId,
+      branchId: dto.branchId,
+    });
+    const companyId = await this.ensureCompanyExists(scopedCompanyId);
+    const branchId = await this.resolveBranchId(companyId, scope.branchId);
+    const employee = await this.ensureEmployeeBelongsToCompany(
+      dto.employeeId,
+      companyId,
+    );
     const fromDate = new Date(dto.fromDate);
     const toDate = new Date(dto.toDate);
 
-    this.ensureDateRange(fromDate, toDate, 'Leave end date must be after start date');
+    this.ensureDateRange(
+      fromDate,
+      toDate,
+      'Leave end date must be after start date',
+    );
 
     if (branchId && employee.branchId && employee.branchId !== branchId) {
-      throw new ConflictException('Employee does not belong to the selected branch');
+      throw new ConflictException(
+        'Employee does not belong to the selected branch',
+      );
     }
 
     const days = this.resolveDays(dto.days, fromDate, toDate);
@@ -48,18 +67,24 @@ export class EmployeeLeaveService {
     });
   }
 
-  async findAll(query: EmployeeLeaveQueryDto) {
+  async findAll(query: EmployeeLeaveQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+      branchId: query.branchId,
+    });
 
     const where: Prisma.EmployeeLeaveWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
-      ...(query.branchId ? { branchId: query.branchId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { branchId: scope.branchId } : {}),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
       ...(query.type ? { type: query.type } : {}),
-      ...(query.affectsSalary !== undefined ? { affectsSalary: query.affectsSalary } : {}),
+      ...(query.affectsSalary !== undefined
+        ? { affectsSalary: query.affectsSalary }
+        : {}),
       ...(search ? { reason: { contains: search, mode: 'insensitive' } } : {}),
       ...this.buildDateOverlapFilter(query.dateFrom, query.dateTo),
     };
@@ -83,31 +108,57 @@ export class EmployeeLeaveService {
     };
   }
 
-  async findOne(id: string) {
-    return this.findEmployeeLeaveByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const employeeLeave = await this.findEmployeeLeaveByIdOrThrow(id);
+    assertWithinScope(actor, employeeLeave);
+    return employeeLeave;
   }
 
-  async update(id: string, dto: UpdateEmployeeLeaveDto, actor: AccessTokenPayload) {
+  async update(
+    id: string,
+    dto: UpdateEmployeeLeaveDto,
+    actor: AccessTokenPayload,
+  ) {
     const existing = await this.findEmployeeLeaveByIdOrThrow(id);
+    assertWithinScope(actor, existing);
+
     const companyId =
       dto.companyId !== undefined
-        ? await this.ensureCompanyExists(dto.companyId)
+        ? await this.ensureCompanyExists(
+            resolveScopedCompanyId(actor, dto.companyId),
+          )
         : existing.companyId;
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId,
+      branchId:
+        dto.branchId !== undefined
+          ? dto.branchId
+          : (existing.branchId ?? undefined),
+    });
     const branchId =
       dto.branchId !== undefined
-        ? await this.resolveBranchId(companyId, dto.branchId)
+        ? await this.resolveBranchId(companyId, scope.branchId)
         : await this.resolveBranchId(companyId, existing.branchId);
     const employee =
       dto.employeeId !== undefined
         ? await this.ensureEmployeeBelongsToCompany(dto.employeeId, companyId)
-        : await this.ensureEmployeeBelongsToCompany(existing.employeeId, companyId);
+        : await this.ensureEmployeeBelongsToCompany(
+            existing.employeeId,
+            companyId,
+          );
     const fromDate = dto.fromDate ? new Date(dto.fromDate) : existing.fromDate;
     const toDate = dto.toDate ? new Date(dto.toDate) : existing.toDate;
 
-    this.ensureDateRange(fromDate, toDate, 'Leave end date must be after start date');
+    this.ensureDateRange(
+      fromDate,
+      toDate,
+      'Leave end date must be after start date',
+    );
 
     if (branchId && employee.branchId && employee.branchId !== branchId) {
-      throw new ConflictException('Employee does not belong to the selected branch');
+      throw new ConflictException(
+        'Employee does not belong to the selected branch',
+      );
     }
 
     const days =
@@ -127,15 +178,18 @@ export class EmployeeLeaveService {
         fromDate,
         toDate,
         days,
-        ...(dto.affectsSalary !== undefined ? { affectsSalary: dto.affectsSalary } : {}),
+        ...(dto.affectsSalary !== undefined
+          ? { affectsSalary: dto.affectsSalary }
+          : {}),
         ...(dto.reason !== undefined ? { reason: trimToNull(dto.reason) } : {}),
         updatedById: actor.sub,
       },
     });
   }
 
-  async delete(id: string) {
-    await this.findEmployeeLeaveByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const employeeLeave = await this.findEmployeeLeaveByIdOrThrow(id);
+    assertWithinScope(actor, employeeLeave);
 
     await this.prisma.employeeLeave.delete({
       where: { id },
@@ -190,13 +244,18 @@ export class EmployeeLeaveService {
     }
 
     if (branch.companyId !== companyId) {
-      throw new ConflictException('Branch does not belong to the selected company');
+      throw new ConflictException(
+        'Branch does not belong to the selected company',
+      );
     }
 
     return branch.id;
   }
 
-  private async ensureEmployeeBelongsToCompany(employeeId: string, companyId: string) {
+  private async ensureEmployeeBelongsToCompany(
+    employeeId: string,
+    companyId: string,
+  ) {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       select: {
@@ -211,25 +270,38 @@ export class EmployeeLeaveService {
     }
 
     if (employee.companyId !== companyId) {
-      throw new ConflictException('Employee does not belong to the selected company');
+      throw new ConflictException(
+        'Employee does not belong to the selected company',
+      );
     }
 
     return employee;
   }
 
-  private ensureDateRange(startDate: Date, endDate: Date, message: string): void {
+  private ensureDateRange(
+    startDate: Date,
+    endDate: Date,
+    message: string,
+  ): void {
     if (endDate < startDate) {
       throw new BadRequestException(message);
     }
   }
 
-  private resolveDays(days: number | undefined, fromDate: Date, toDate: Date): number {
+  private resolveDays(
+    days: number | undefined,
+    fromDate: Date,
+    toDate: Date,
+  ): number {
     if (days !== undefined) {
       return days;
     }
 
     const millisecondsPerDay = 24 * 60 * 60 * 1000;
-    return Math.floor((toDate.getTime() - fromDate.getTime()) / millisecondsPerDay) + 1;
+    return (
+      Math.floor((toDate.getTime() - fromDate.getTime()) / millisecondsPerDay) +
+      1
+    );
   }
 
   private buildDateOverlapFilter(

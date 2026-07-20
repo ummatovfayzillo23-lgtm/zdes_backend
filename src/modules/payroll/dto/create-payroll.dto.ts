@@ -11,9 +11,12 @@ import {
 } from 'class-validator';
 
 export class CreatePayrollDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description: 'Required for superadmin; auto-filled for admin/manager',
+  })
+  @IsOptional()
   @IsUUID()
-  companyId!: string;
+  companyId?: string;
 
   @ApiProperty()
   @IsUUID()

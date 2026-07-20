@@ -30,6 +30,11 @@ import {
 } from '../../../common/utils/helpers';
 import { AccessTokenPayload } from '../../auth/interfaces/access-token-payload.interface';
 import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../../common/utils/scope.util';
+import {
   ATTENDANCE_KPI_SETTING_KEY,
   AUTO_ATTENDANCE_REASON_PREFIX,
   DEFAULT_ATTENDANCE_KPI_TEMPLATE,
@@ -68,19 +73,27 @@ export class AttendanceService {
     private readonly awsFaceVerificationService: AwsFaceVerificationService,
   ) {}
 
-  async getKpiTemplate(companyId: string): Promise<AttendanceKpiTemplateDto> {
+  async getKpiTemplate(
+    companyId: string,
+    actor: AccessTokenPayload,
+  ): Promise<AttendanceKpiTemplateDto> {
+    assertWithinScope(actor, { companyId });
     return this.getKpiTemplateOrDefault(companyId);
   }
 
-  async upsertKpiTemplate(dto: AttendanceKpiTemplateDto): Promise<AttendanceKpiTemplateDto> {
-    await this.ensureCompanyExists(dto.companyId);
+  async upsertKpiTemplate(
+    dto: AttendanceKpiTemplateDto,
+    actor: AccessTokenPayload,
+  ): Promise<AttendanceKpiTemplateDto> {
+    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    await this.ensureCompanyExists(companyId);
 
     const template = this.normalizeKpiTemplate(dto);
 
     await this.prisma.setting.upsert({
       where: {
         companyId_key: {
-          companyId: dto.companyId,
+          companyId,
           key: ATTENDANCE_KPI_SETTING_KEY,
         },
       },
@@ -88,25 +101,25 @@ export class AttendanceService {
         value: template,
       },
       create: {
-        companyId: dto.companyId,
+        companyId,
         key: ATTENDANCE_KPI_SETTING_KEY,
         value: template,
       },
     });
 
     return {
-      companyId: dto.companyId,
+      companyId,
       ...template,
     };
   }
 
-  async checkIn(
-    dto: AttendanceCheckInDto,
-    actor: AccessTokenPayload,
-  ) {
+  async checkIn(dto: AttendanceCheckInDto, actor: AccessTokenPayload) {
     const eventTime = this.parseEventTime(dto.eventTime);
     const employee = await this.findEmployeeOrThrow(dto.employeeId);
-    const template = await this.getKpiTemplateOrDefault(employee.companyId as string);
+    assertWithinScope(actor, employee);
+    const template = await this.getKpiTemplateOrDefault(
+      employee.companyId as string,
+    );
     const terminalId = await this.ensureTerminalBelongsToCompany(
       dto.terminalId,
       employee.companyId as string,
@@ -192,13 +205,13 @@ export class AttendanceService {
     });
   }
 
-  async checkOut(
-    dto: AttendanceCheckOutDto,
-    actor: AccessTokenPayload,
-  ) {
+  async checkOut(dto: AttendanceCheckOutDto, actor: AccessTokenPayload) {
     const eventTime = this.parseEventTime(dto.eventTime);
     const employee = await this.findEmployeeOrThrow(dto.employeeId);
-    const template = await this.getKpiTemplateOrDefault(employee.companyId as string);
+    assertWithinScope(actor, employee);
+    const template = await this.getKpiTemplateOrDefault(
+      employee.companyId as string,
+    );
     const terminalId = await this.ensureTerminalBelongsToCompany(
       dto.terminalId,
       employee.companyId as string,
@@ -267,14 +280,18 @@ export class AttendanceService {
     });
   }
 
-  async findAll(query: AttendanceQueryDto) {
+  async findAll(query: AttendanceQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+      branchId: query.branchId,
+    });
 
     const where: Prisma.AttendanceWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
-      ...(query.branchId ? { branchId: query.branchId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { branchId: scope.branchId } : {}),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
       ...(query.terminalId ? { terminalId: query.terminalId } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -292,7 +309,9 @@ export class AttendanceService {
     ]);
 
     const responses = await Promise.all(
-      items.map(async (item) => this.toResponse(item, await this.loadAdjustmentsForAttendance(item))),
+      items.map(async (item) =>
+        this.toResponse(item, await this.loadAdjustmentsForAttendance(item)),
+      ),
     );
 
     return {
@@ -304,7 +323,7 @@ export class AttendanceService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actor: AccessTokenPayload) {
     const attendance = await this.prisma.attendance.findUnique({
       where: { id },
     });
@@ -313,7 +332,12 @@ export class AttendanceService {
       throw new NotFoundException('Attendance not found');
     }
 
-    return this.toResponse(attendance, await this.loadAdjustmentsForAttendance(attendance));
+    assertWithinScope(actor, attendance);
+
+    return this.toResponse(
+      attendance,
+      await this.loadAdjustmentsForAttendance(attendance),
+    );
   }
 
   private async verifyAndUploadAttendanceImage(input: {
@@ -326,22 +350,28 @@ export class AttendanceService {
     const referenceImageUrl = trimToNull(input.employee.faceImageUrl);
 
     if (!referenceImageUrl) {
-      throw new ConflictException('Employee does not have a reference face image');
+      throw new ConflictException(
+        'Employee does not have a reference face image',
+      );
     }
 
-    const { buffer, contentType: decodedContentType } = decodeBase64Image(input.imageBase64);
+    const { buffer, contentType: decodedContentType } = decodeBase64Image(
+      input.imageBase64,
+    );
 
     if (!buffer.length) {
       throw new BadRequestException('Attendance image is empty');
     }
 
-    const contentType = trimToNull(input.contentType) ?? decodedContentType ?? 'image/jpeg';
+    const contentType =
+      trimToNull(input.contentType) ?? decodedContentType ?? 'image/jpeg';
 
-    const similarity = await this.awsFaceVerificationService.verifyAttendanceFace({
-      sourceImageBuffer: buffer,
-      referenceImageUrl,
-      similarityThreshold: input.similarityThreshold,
-    });
+    const similarity =
+      await this.awsFaceVerificationService.verifyAttendanceFace({
+        sourceImageBuffer: buffer,
+        referenceImageUrl,
+        similarityThreshold: input.similarityThreshold,
+      });
 
     const uploadedImage = await this.awsS3Service.uploadAttendanceImage({
       companyId: input.employee.companyId as string,
@@ -391,12 +421,21 @@ export class AttendanceService {
       };
     }
 
-    const scheduledStart = parseTimeToUtcDate(attendanceDate, workSchedule.startTime);
-    const scheduledEnd = parseTimeToUtcDate(attendanceDate, workSchedule.endTime);
+    const scheduledStart = parseTimeToUtcDate(
+      attendanceDate,
+      workSchedule.startTime,
+    );
+    const scheduledEnd = parseTimeToUtcDate(
+      attendanceDate,
+      workSchedule.endTime,
+    );
     const graceMinutes = workSchedule.graceMinutes ?? 0;
 
     const lateMinutes = checkIn
-      ? Math.max(0, calculateMinutesDifference(scheduledStart, checkIn) - graceMinutes)
+      ? Math.max(
+          0,
+          calculateMinutesDifference(scheduledStart, checkIn) - graceMinutes,
+        )
       : 0;
     const earlyLeaveMinutes =
       checkOut && checkOut.getTime() < scheduledEnd.getTime()
@@ -414,7 +453,12 @@ export class AttendanceService {
       lateMinutes,
       earlyLeaveMinutes,
       overtimeMinutes,
-      status: this.resolveAttendanceStatus(lateMinutes, earlyLeaveMinutes, checkIn, checkOut),
+      status: this.resolveAttendanceStatus(
+        lateMinutes,
+        earlyLeaveMinutes,
+        checkIn,
+        checkOut,
+      ),
     };
   }
 
@@ -460,7 +504,8 @@ export class AttendanceService {
 
     const adjustmentPayloads = [
       {
-        shouldCreate: attendance.lateMinutes > 0 && template.latePenaltyPerMinute > 0,
+        shouldCreate:
+          attendance.lateMinutes > 0 && template.latePenaltyPerMinute > 0,
         type: AdjustmentType.penalty,
         category: AdjustmentCategory.late,
         amount: attendance.lateMinutes * template.latePenaltyPerMinute,
@@ -468,14 +513,17 @@ export class AttendanceService {
       },
       {
         shouldCreate:
-          attendance.earlyLeaveMinutes > 0 && template.earlyLeavePenaltyPerMinute > 0,
+          attendance.earlyLeaveMinutes > 0 &&
+          template.earlyLeavePenaltyPerMinute > 0,
         type: AdjustmentType.penalty,
         category: AdjustmentCategory.early_leave,
-        amount: attendance.earlyLeaveMinutes * template.earlyLeavePenaltyPerMinute,
+        amount:
+          attendance.earlyLeaveMinutes * template.earlyLeavePenaltyPerMinute,
         reason: `${reasonPrefix}early_leave`,
       },
       {
-        shouldCreate: attendance.overtimeMinutes > 0 && template.overtimeBonusPerMinute > 0,
+        shouldCreate:
+          attendance.overtimeMinutes > 0 && template.overtimeBonusPerMinute > 0,
         type: AdjustmentType.bonus,
         category: AdjustmentCategory.overtime,
         amount: attendance.overtimeMinutes * template.overtimeBonusPerMinute,
@@ -569,7 +617,9 @@ export class AttendanceService {
     };
   }
 
-  private async findEmployeeOrThrow(employeeId: string): Promise<UserWithSchedule> {
+  private async findEmployeeOrThrow(
+    employeeId: string,
+  ): Promise<UserWithSchedule> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       include: {
@@ -610,7 +660,9 @@ export class AttendanceService {
     }
 
     if (terminal.companyId !== companyId) {
-      throw new ConflictException('Terminal does not belong to the selected company');
+      throw new ConflictException(
+        'Terminal does not belong to the selected company',
+      );
     }
 
     return terminal.id;
@@ -627,7 +679,9 @@ export class AttendanceService {
     }
   }
 
-  private async getKpiTemplateOrDefault(companyId: string): Promise<AttendanceKpiTemplate> {
+  private async getKpiTemplateOrDefault(
+    companyId: string,
+  ): Promise<AttendanceKpiTemplate> {
     await this.ensureCompanyExists(companyId);
 
     const setting = await this.prisma.setting.findUnique({
@@ -640,7 +694,9 @@ export class AttendanceService {
     });
 
     const value =
-      setting?.value && typeof setting.value === 'object' && !Array.isArray(setting.value)
+      setting?.value &&
+      typeof setting.value === 'object' &&
+      !Array.isArray(setting.value)
         ? (setting.value as Record<string, unknown>)
         : {};
 
@@ -665,16 +721,22 @@ export class AttendanceService {
     };
   }
 
-  private normalizeKpiTemplate(dto: AttendanceKpiTemplateDto): Omit<AttendanceKpiTemplate, 'companyId'> {
+  private normalizeKpiTemplate(
+    dto: AttendanceKpiTemplateDto,
+  ): Omit<AttendanceKpiTemplate, 'companyId'> {
     return {
-      latePenaltyPerMinute: dto.latePenaltyPerMinute ?? DEFAULT_ATTENDANCE_KPI_TEMPLATE.latePenaltyPerMinute,
+      latePenaltyPerMinute:
+        dto.latePenaltyPerMinute ??
+        DEFAULT_ATTENDANCE_KPI_TEMPLATE.latePenaltyPerMinute,
       earlyLeavePenaltyPerMinute:
         dto.earlyLeavePenaltyPerMinute ??
         DEFAULT_ATTENDANCE_KPI_TEMPLATE.earlyLeavePenaltyPerMinute,
       overtimeBonusPerMinute:
-        dto.overtimeBonusPerMinute ?? DEFAULT_ATTENDANCE_KPI_TEMPLATE.overtimeBonusPerMinute,
+        dto.overtimeBonusPerMinute ??
+        DEFAULT_ATTENDANCE_KPI_TEMPLATE.overtimeBonusPerMinute,
       faceSimilarityThreshold:
-        dto.faceSimilarityThreshold ?? DEFAULT_ATTENDANCE_KPI_TEMPLATE.faceSimilarityThreshold,
+        dto.faceSimilarityThreshold ??
+        DEFAULT_ATTENDANCE_KPI_TEMPLATE.faceSimilarityThreshold,
     };
   }
 
@@ -690,7 +752,9 @@ export class AttendanceService {
     const eventTime = value ? new Date(value) : new Date();
 
     if (Number.isNaN(eventTime.getTime())) {
-      throw new BadRequestException('eventTime must be a valid ISO date string');
+      throw new BadRequestException(
+        'eventTime must be a valid ISO date string',
+      );
     }
 
     return eventTime;
@@ -704,7 +768,10 @@ export class AttendanceService {
     return value.filter((item): item is number => typeof item === 'number');
   }
 
-  private buildDateRangeFilter(dateFrom?: string, dateTo?: string): Prisma.AttendanceWhereInput {
+  private buildDateRangeFilter(
+    dateFrom?: string,
+    dateTo?: string,
+  ): Prisma.AttendanceWhereInput {
     if (!dateFrom && !dateTo) {
       return {};
     }
@@ -717,7 +784,10 @@ export class AttendanceService {
     };
   }
 
-  private mergeNotes(existingNotes: string | null, incomingNotes?: string): string | null {
+  private mergeNotes(
+    existingNotes: string | null,
+    incomingNotes?: string,
+  ): string | null {
     const normalizedIncomingNotes = trimToNull(incomingNotes);
 
     if (!existingNotes) {

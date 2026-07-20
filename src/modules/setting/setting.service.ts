@@ -1,7 +1,17 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertWithinScope,
+  resolveCompanyBranchScope,
+  resolveScopedCompanyId,
+} from '../../common/utils/scope.util';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateSettingDto } from './dto/create-setting.dto';
 import { SettingQueryDto } from './dto/setting-query.dto';
 import { UpdateSettingDto } from './dto/update-setting.dto';
@@ -10,8 +20,10 @@ import { UpdateSettingDto } from './dto/update-setting.dto';
 export class SettingService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateSettingDto) {
-    const companyId = await this.ensureCompanyExists(dto.companyId);
+  async create(dto: CreateSettingDto, actor: AccessTokenPayload) {
+    const companyId = await this.ensureCompanyExists(
+      resolveScopedCompanyId(actor, dto.companyId),
+    );
     const key = this.normalizeRequired(dto.key, 'Setting key is required');
     await this.ensureUniqueKey(companyId, key);
 
@@ -24,14 +36,17 @@ export class SettingService {
     });
   }
 
-  async findAll(query: SettingQueryDto) {
+  async findAll(query: SettingQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
     const search = trimToNull(query.search);
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+    });
 
     const where: Prisma.SettingWhereInput = {
-      ...(query.companyId ? { companyId: query.companyId } : {}),
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
       ...(search ? { key: { contains: search, mode: 'insensitive' } } : {}),
     };
 
@@ -45,19 +60,35 @@ export class SettingService {
       this.prisma.setting.count({ where }),
     ]);
 
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
-  async findOne(id: string) {
-    return this.findSettingByIdOrThrow(id);
+  async findOne(id: string, actor: AccessTokenPayload) {
+    const setting = await this.findSettingByIdOrThrow(id);
+    assertWithinScope(actor, setting);
+    return setting;
   }
 
-  async update(id: string, dto: UpdateSettingDto) {
+  async update(id: string, dto: UpdateSettingDto, actor: AccessTokenPayload) {
     const existing = await this.findSettingByIdOrThrow(id);
+    assertWithinScope(actor, existing);
+
     const companyId =
-      dto.companyId !== undefined ? await this.ensureCompanyExists(dto.companyId) : existing.companyId;
+      dto.companyId !== undefined
+        ? await this.ensureCompanyExists(
+            resolveScopedCompanyId(actor, dto.companyId),
+          )
+        : existing.companyId;
     const key =
-      dto.key !== undefined ? this.normalizeRequired(dto.key, 'Setting key is required') : existing.key;
+      dto.key !== undefined
+        ? this.normalizeRequired(dto.key, 'Setting key is required')
+        : existing.key;
 
     await this.ensureUniqueKey(companyId, key, id);
 
@@ -66,13 +97,16 @@ export class SettingService {
       data: {
         companyId,
         key,
-        ...(dto.value !== undefined ? { value: dto.value as Prisma.InputJsonValue } : {}),
+        ...(dto.value !== undefined
+          ? { value: dto.value as Prisma.InputJsonValue }
+          : {}),
       },
     });
   }
 
-  async delete(id: string) {
-    await this.findSettingByIdOrThrow(id);
+  async delete(id: string, actor: AccessTokenPayload) {
+    const setting = await this.findSettingByIdOrThrow(id);
+    assertWithinScope(actor, setting);
     await this.prisma.setting.delete({ where: { id } });
     return { success: true as const, id };
   }
@@ -96,7 +130,11 @@ export class SettingService {
     return company.id;
   }
 
-  private async ensureUniqueKey(companyId: string, key: string, excludedId?: string) {
+  private async ensureUniqueKey(
+    companyId: string,
+    key: string,
+    excludedId?: string,
+  ) {
     const setting = await this.prisma.setting.findFirst({
       where: {
         companyId,
@@ -107,7 +145,9 @@ export class SettingService {
     });
 
     if (setting) {
-      throw new ConflictException('Setting key already exists for this company');
+      throw new ConflictException(
+        'Setting key already exists for this company',
+      );
     }
   }
 

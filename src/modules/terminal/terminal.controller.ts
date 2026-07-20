@@ -11,6 +11,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateTerminalDto } from './dto/create-terminal.dto';
 import { TerminalQueryDto } from './dto/terminal-query.dto';
 import { UpdateTerminalDto } from './dto/update-terminal.dto';
@@ -25,31 +27,47 @@ export class TerminalController {
 
   @Post()
   @ApiOperation({ summary: 'Create terminal - superadmin, admin, manager' })
-  create(@Body() dto: CreateTerminalDto) {
-    return this.terminalService.create(dto);
+  create(
+    @Body() dto: CreateTerminalDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.terminalService.create(dto, actor);
   }
 
   @Get()
   @ApiOperation({ summary: 'Get terminals - superadmin, admin, manager' })
-  findAll(@Query() query: TerminalQueryDto) {
-    return this.terminalService.findAll(query);
+  findAll(
+    @Query() query: TerminalQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.terminalService.findAll(query, actor);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get terminal by id - superadmin, admin, manager' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.terminalService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.terminalService.findOne(id, actor);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update terminal - superadmin, admin, manager' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateTerminalDto) {
-    return this.terminalService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTerminalDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.terminalService.update(id, dto, actor);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete terminal - superadmin, admin, manager' })
-  delete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.terminalService.delete(id);
+  delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.terminalService.delete(id, actor);
   }
 }
