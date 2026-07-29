@@ -3,7 +3,6 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
-  IsBoolean,
   IsInt,
   IsOptional,
   IsString,
@@ -65,15 +64,11 @@ export class CreateWorkScheduleDto {
   @Max(120)
   graceMinutes?: number;
 
-  @ApiPropertyOptional({ example: false })
-  @IsOptional()
-  @IsBoolean()
-  isDefault?: boolean;
-
   @ApiPropertyOptional({
     example: 'uuid-user-id',
     description:
-      'If provided, this schedule is immediately assigned to the user',
+      'If provided, this schedule is created for that single user only (not the company default). ' +
+      'If omitted, this schedule becomes the company-wide default automatically.',
   })
   @IsOptional()
   @IsUUID()

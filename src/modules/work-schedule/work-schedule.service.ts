@@ -40,7 +40,10 @@ export class WorkScheduleService {
       }
     }
 
-    if (dto.isDefault) await this.clearDefaultForCompany(companyId);
+    // Company-wide schedule (no userId) automatically becomes the default;
+    // a schedule created for a single user never is.
+    const isDefault = !dto.userId;
+    if (isDefault) await this.clearDefaultForCompany(companyId);
 
     const workSchedule = await this.prisma.workSchedule.create({
       data: {
@@ -51,7 +54,7 @@ export class WorkScheduleService {
         endTime: dto.endTime,
         workDays: dto.workDays,
         graceMinutes: dto.graceMinutes ?? 0,
-        isDefault: dto.isDefault ?? false,
+        isDefault,
       },
     });
 
@@ -132,10 +135,6 @@ export class WorkScheduleService {
     if (dto.name || dto.companyId)
       await this.ensureNameIsUnique(companyId, normalizedName, id);
 
-    if (dto.isDefault === true && !existing.isDefault) {
-      await this.clearDefaultForCompany(companyId, id);
-    }
-
     return this.prisma.workSchedule.update({
       where: { id },
       data: {
@@ -150,7 +149,6 @@ export class WorkScheduleService {
         ...(dto.graceMinutes !== undefined
           ? { graceMinutes: dto.graceMinutes }
           : {}),
-        ...(dto.isDefault !== undefined ? { isDefault: dto.isDefault } : {}),
       },
     });
   }

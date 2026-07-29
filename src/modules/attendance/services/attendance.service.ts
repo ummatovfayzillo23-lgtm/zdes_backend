@@ -639,7 +639,19 @@ export class AttendanceService {
       throw new ForbiddenException('Employee is inactive or blocked');
     }
 
-    return employee;
+    const workSchedule =
+      employee.workSchedule ??
+      (await this.findDefaultWorkSchedule(employee.companyId));
+
+    return { ...employee, workSchedule };
+  }
+
+  private async findDefaultWorkSchedule(
+    companyId: string,
+  ): Promise<WorkSchedule | null> {
+    return this.prisma.workSchedule.findFirst({
+      where: { companyId, isDefault: true, isActive: true },
+    });
   }
 
   private async ensureTerminalBelongsToCompany(
