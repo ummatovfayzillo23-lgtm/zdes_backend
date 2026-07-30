@@ -14,7 +14,11 @@ import { REDIS_CLIENT } from './redis.constants';
           process.env.REDIS_URL ?? 'redis://localhost:6379',
           {
             lazyConnect: false,
-            maxRetriesPerRequest: 2,
+            maxRetriesPerRequest: 5,
+            keepAlive: 10000,
+            connectTimeout: 10000,
+            retryStrategy: (times) => Math.min(times * 500, 5000),
+            reconnectOnError: () => true,
           },
         );
 
@@ -23,6 +27,9 @@ import { REDIS_CLIENT } from './redis.constants';
         });
         client.on('connect', () => {
           logger.log('Redis connected');
+        });
+        client.on('reconnecting', (delay: number) => {
+          logger.warn(`Redis reconnecting in ${delay}ms`);
         });
 
         return client;
