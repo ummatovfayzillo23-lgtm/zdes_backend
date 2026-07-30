@@ -20,12 +20,13 @@ import type {
 } from '@prisma/client';
 import { PrismaService } from '../../../common/congif/prisma/prisma.service';
 import {
+  DEFAULT_TIMEZONE,
   calculateMinutesDifference,
   decodeBase64Image,
   getMonthKey,
   getWorkDayNumber,
-  parseTimeToUtcDate,
-  toUtcDateOnly,
+  parseTimeToZonedDate,
+  toZonedDateOnly,
   trimToNull,
 } from '../../../common/utils/helpers';
 import { AccessTokenPayload } from '../../auth/interfaces/access-token-payload.interface';
@@ -53,6 +54,7 @@ type AttendanceKpiTemplate = Required<
 
 type UserWithSchedule = User & {
   workSchedule: WorkSchedule | null;
+  timezone: string;
 };
 
 type AttendanceMetrics = {
@@ -133,7 +135,7 @@ export class AttendanceService {
       similarityThreshold: template.faceSimilarityThreshold,
     });
 
-    const attendanceDate = toUtcDateOnly(eventTime);
+    const attendanceDate = toZonedDateOnly(eventTime, employee.timezone);
     const existingAttendance = await this.prisma.attendance.findUnique({
       where: {
         employeeId_date: {
@@ -153,6 +155,7 @@ export class AttendanceService {
         attendanceDate,
         eventTime,
         existingAttendance?.checkOut ?? null,
+        employee.timezone,
       );
 
       const attendance = existingAttendance
@@ -225,7 +228,7 @@ export class AttendanceService {
       similarityThreshold: template.faceSimilarityThreshold,
     });
 
-    const attendanceDate = toUtcDateOnly(eventTime);
+    const attendanceDate = toZonedDateOnly(eventTime, employee.timezone);
     const existingAttendance = await this.prisma.attendance.findUnique({
       where: {
         employeeId_date: {
@@ -249,6 +252,7 @@ export class AttendanceService {
         attendanceDate,
         existingAttendance.checkIn,
         eventTime,
+        employee.timezone,
       );
 
       const attendance = await tx.attendance.update({
@@ -392,6 +396,7 @@ export class AttendanceService {
     attendanceDate: Date,
     checkIn: Date | null,
     checkOut: Date | null,
+    timezone: string,
   ): AttendanceMetrics {
     const workedMinutes = calculateMinutesDifference(checkIn, checkOut);
 
@@ -421,13 +426,15 @@ export class AttendanceService {
       };
     }
 
-    const scheduledStart = parseTimeToUtcDate(
+    const scheduledStart = parseTimeToZonedDate(
       attendanceDate,
       workSchedule.startTime,
+      timezone,
     );
-    const scheduledEnd = parseTimeToUtcDate(
+    const scheduledEnd = parseTimeToZonedDate(
       attendanceDate,
       workSchedule.endTime,
+      timezone,
     );
     const graceMinutes = workSchedule.graceMinutes ?? 0;
 
@@ -624,6 +631,7 @@ export class AttendanceService {
       where: { id: employeeId },
       include: {
         workSchedule: true,
+        company: { select: { timezone: true } },
       },
     });
 
@@ -643,7 +651,11 @@ export class AttendanceService {
       employee.workSchedule ??
       (await this.findDefaultWorkSchedule(employee.companyId));
 
-    return { ...employee, workSchedule };
+    return {
+      ...employee,
+      workSchedule,
+      timezone: employee.company?.timezone ?? DEFAULT_TIMEZONE,
+    };
   }
 
   private async findDefaultWorkSchedule(

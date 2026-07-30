@@ -27,6 +27,7 @@ export class CompanyService {
         email: trimToNull(dto.email),
         address: trimToNull(dto.address),
         logoUrl: trimToNull(dto.logoUrl),
+        ...(dto.timezone ? { timezone: dto.timezone } : {}),
       },
     });
   }
@@ -91,6 +92,7 @@ export class CompanyService {
         ...(dto.email !== undefined ? { email: trimToNull(dto.email) } : {}),
         ...(dto.address !== undefined ? { address: trimToNull(dto.address) } : {}),
         ...(dto.logoUrl !== undefined ? { logoUrl: trimToNull(dto.logoUrl) } : {}),
+        ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
       },
     });
   }

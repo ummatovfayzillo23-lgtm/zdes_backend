@@ -153,7 +153,19 @@ export class PositionService {
   }
 
   private async findPositionByIdOrThrow(id: string) {
-    const position = await this.prisma.position.findUnique({ where: { id } });
+    const position = await this.prisma.position.findUnique({
+      where: { id },
+      include: {
+        company: { select: { id: true, name: true, branches: true } },
+        department: {
+          select: {
+            id: true,
+            name: true,
+            isActive: true,
+          },
+        },
+      },
+    });
     if (!position) throw new NotFoundException('Position not found');
     return position;
   }
@@ -199,7 +211,7 @@ export class PositionService {
 
     if (!departmentId) {
       throw new ForbiddenException(
-        "You cannot access a position outside your branch",
+        'You cannot access a position outside your branch',
       );
     }
 

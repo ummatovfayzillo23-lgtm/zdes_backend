@@ -15,7 +15,7 @@ import type {
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import {
   calculateMinutesDifference,
-  toUtcDateOnly,
+  toZonedDateOnly,
   trimToNull,
 } from '../../common/utils/helpers';
 import { IngestTurnstileLogDto } from './dto/ingest-turnstile-log.dto';
@@ -24,27 +24,31 @@ import { IngestTurnstileLogDto } from './dto/ingest-turnstile-log.dto';
 export class TurnstileService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async ingestLog(
-    dto: IngestTurnstileLogDto,
-    sharedSecret?: string,
-  ) {
+  async ingestLog(dto: IngestTurnstileLogDto, sharedSecret?: string) {
     this.validateSharedSecret(sharedSecret);
     const terminalSerialNumber = trimToNull(dto.terminalSerialNumber);
     const deviceUserId = trimToNull(dto.deviceUserId);
 
     if (!terminalSerialNumber || !deviceUserId) {
-      throw new BadRequestException('terminalSerialNumber and deviceUserId are required');
+      throw new BadRequestException(
+        'terminalSerialNumber and deviceUserId are required',
+      );
     }
 
     const eventTime = new Date(dto.eventTime);
 
     if (Number.isNaN(eventTime.getTime())) {
-      throw new BadRequestException('eventTime must be a valid ISO date string');
+      throw new BadRequestException(
+        'eventTime must be a valid ISO date string',
+      );
     }
 
     const terminal = await this.prisma.terminal.findUnique({
       where: {
         serialNumber: terminalSerialNumber,
+      },
+      include: {
+        company: { select: { timezone: true } },
       },
     });
 
@@ -81,7 +85,14 @@ export class TurnstileService {
 
     return this.prisma.$transaction(async (tx) => {
       const outcome = employee
-        ? await this.createAttendanceFromLog(tx, terminal, employee, dto.eventType, eventTime)
+        ? await this.createAttendanceFromLog(
+            tx,
+            terminal,
+            employee,
+            dto.eventType,
+            eventTime,
+            terminal.company.timezone,
+          )
         : {
             processed: false,
             attendanceId: null,
@@ -122,13 +133,14 @@ export class TurnstileService {
     employee: User,
     eventType: TerminalEventType,
     eventTime: Date,
+    timezone: string,
   ): Promise<{
     processed: boolean;
     attendanceId: string;
     employeeId: string;
     message: string;
   }> {
-    const attendanceDate = toUtcDateOnly(eventTime);
+    const attendanceDate = toZonedDateOnly(eventTime, timezone);
     const existingAttendance = await tx.attendance.findUnique({
       where: {
         employeeId_date: {
@@ -138,7 +150,11 @@ export class TurnstileService {
       },
     });
 
-    const nextTimes = this.getNextAttendanceTimes(existingAttendance, eventType, eventTime);
+    const nextTimes = this.getNextAttendanceTimes(
+      existingAttendance,
+      eventType,
+      eventTime,
+    );
     const workedMinutes = calculateMinutesDifference(
       nextTimes.checkIn,
       nextTimes.checkOut,

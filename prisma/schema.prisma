@@ -15,6 +15,7 @@ model Company {
   email     String?   @db.VarChar(255)
   address   String?   @db.VarChar(500)
   logoUrl   String?   @db.VarChar(500)
+  timezone  String    @default("Asia/Tashkent") @db.VarChar(64)
   isActive  Boolean   @default(true)
   stoppedAt DateTime? @db.Timestamptz(6)
 

@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  IsTimeZone,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class CreateCompanyDto {
   @ApiProperty({
@@ -49,4 +56,14 @@ export class CreateCompanyDto {
   @IsString()
   @MaxLength(500)
   logoUrl?: string;
+
+  @ApiPropertyOptional({
+    example: 'Asia/Tashkent',
+    default: 'Asia/Tashkent',
+    description:
+      'IANA timezone used to compute attendance schedules for this company',
+  })
+  @IsOptional()
+  @IsTimeZone()
+  timezone?: string;
 }
