@@ -394,10 +394,17 @@ model EmployeeLeave  {
   branchId   String? @db.Uuid
   employeeId String  @db.Uuid
 
-  type     LeaveType @default(vacation)
-  fromDate DateTime  @db.Date
-  toDate   DateTime  @db.Date
-  days     Int
+  type         LeaveType         @default(vacation)
+  durationType LeaveDurationType @default(daily)
+  fromDate     DateTime          @db.Date
+  toDate       DateTime          @db.Date
+  days         Int
+  leaveHours   Int?              @db.SmallInt
+
+  status        LeaveRequestStatus @default(approved)
+  requestedById String?            @db.Uuid
+  respondedById String?            @db.Uuid
+  respondedAt   DateTime?          @db.Timestamptz(6)
 
   affectsSalary Boolean @default(false)
   reason        String?
@@ -416,6 +423,7 @@ model EmployeeLeave  {
   @@index([employeeId])
   @@index([fromDate])
   @@index([toDate])
+  @@index([status])
 }
 
 model Payroll {
@@ -597,6 +605,18 @@ enum LeaveType {
   unpaid
   business_trip
   other
+}
+
+enum LeaveDurationType {
+  hourly
+  daily
+  multi_day
+}
+
+enum LeaveRequestStatus {
+  pending
+  approved
+  rejected
 }
 
 enum PayrollStatus {

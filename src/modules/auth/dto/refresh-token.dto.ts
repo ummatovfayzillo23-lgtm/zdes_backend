@@ -20,4 +20,13 @@ export class RefreshTokenDto {
   @IsOptional()
   @IsString()
   deviceName?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Firebase device token to remove from push notifications on logout',
+    example: 'fcm-device-token',
+  })
+  @IsOptional()
+  @IsString()
+  pushToken?: string;
 }

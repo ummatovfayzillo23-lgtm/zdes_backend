@@ -12,19 +12,24 @@ import {
   resolveScopedCompanyId,
 } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
+import { NotificationService } from '../notification/notification.service';
+import { notificationTemplates } from '../notification/notification.templates';
 import { AdvanceQueryDto } from './dto/advance-query.dto';
 import { CreateAdvanceDto } from './dto/create-advance.dto';
 import { UpdateAdvanceDto } from './dto/update-advance.dto';
 
 @Injectable()
 export class AdvanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notification: NotificationService,
+  ) {}
 
   async create(dto: CreateAdvanceDto, actor: AccessTokenPayload) {
     const companyId = await this.ensureCompanyExists(
       resolveScopedCompanyId(actor, dto.companyId),
     );
-    const employeeId = await this.ensureEmployeeInScope(
+    const employee = await this.ensureEmployeeInScope(
       dto.employeeId,
       companyId,
       actor,
@@ -33,10 +38,10 @@ export class AdvanceService {
     const advanceDate = new Date(dto.date);
     const month = this.resolveMonth(dto.month, advanceDate);
 
-    return this.prisma.advance.create({
+    const advance = await this.prisma.advance.create({
       data: {
         companyId,
-        employeeId,
+        employeeId: employee.id,
         amount: dto.amount,
         date: advanceDate,
         month,
@@ -45,6 +50,23 @@ export class AdvanceService {
         updatedById: actor.sub,
       },
     });
+
+    await this.notification.notifyUserWithTemplate(
+      employee.id,
+      notificationTemplates.advanceCreated(dto.amount),
+    );
+
+    await this.notification.notifyOversight(
+      companyId,
+      employee.branchId,
+      actor.sub,
+      notificationTemplates.advanceCreatedForOversight(
+        this.formatEmployeeName(employee),
+        dto.amount,
+      ),
+    );
+
+    return advance;
   }
 
   async findAll(query: AdvanceQueryDto, actor: AccessTokenPayload) {
@@ -100,14 +122,15 @@ export class AdvanceService {
             resolveScopedCompanyId(actor, dto.companyId),
           )
         : existingAdvance.companyId;
-    const nextEmployeeId =
+    const nextEmployeeId = (
       dto.employeeId !== undefined
         ? await this.ensureEmployeeInScope(dto.employeeId, nextCompanyId, actor)
         : await this.ensureEmployeeInScope(
             existingAdvance.employeeId,
             nextCompanyId,
             actor,
-          );
+          )
+    ).id;
     const nextDate = dto.date ? new Date(dto.date) : existingAdvance.date;
     const nextMonth =
       dto.month !== undefined
@@ -192,13 +215,20 @@ export class AdvanceService {
     employeeId: string,
     companyId: string,
     actor: AccessTokenPayload,
-  ): Promise<string> {
+  ): Promise<{
+    id: string;
+    branchId: string | null;
+    firstName: string | null;
+    lastName: string | null;
+  }> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       select: {
         id: true,
         companyId: true,
         branchId: true,
+        firstName: true,
+        lastName: true,
       },
     });
 
@@ -214,7 +244,17 @@ export class AdvanceService {
 
     assertWithinScope(actor, employee);
 
-    return employee.id;
+    return employee;
+  }
+
+  private formatEmployeeName(employee: {
+    firstName: string | null;
+    lastName: string | null;
+  }): string {
+    return (
+      [employee.firstName, employee.lastName].filter(Boolean).join(' ') ||
+      'Xodim'
+    );
   }
 
   private resolveMonth(month: string | undefined, date: Date): string {

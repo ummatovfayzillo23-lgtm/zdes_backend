@@ -12,13 +12,18 @@ import {
   resolveScopedCompanyId,
 } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
+import { NotificationService } from '../notification/notification.service';
+import { notificationTemplates } from '../notification/notification.templates';
 import { CreateSalaryAdjustmentDto } from './dto/create-salary-adjustment.dto';
 import { SalaryAdjustmentQueryDto } from './dto/salary-adjustment-query.dto';
 import { UpdateSalaryAdjustmentDto } from './dto/update-salary-adjustment.dto';
 
 @Injectable()
 export class SalaryAdjustmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notification: NotificationService,
+  ) {}
 
   async create(dto: CreateSalaryAdjustmentDto, actor: AccessTokenPayload) {
     const companyId = await this.ensureCompanyExists(
@@ -31,7 +36,7 @@ export class SalaryAdjustmentService {
     );
     const adjustmentDate = new Date(dto.date);
 
-    return this.prisma.salaryAdjustment.create({
+    const adjustment = await this.prisma.salaryAdjustment.create({
       data: {
         companyId,
         employeeId,
@@ -45,6 +50,17 @@ export class SalaryAdjustmentService {
         updatedById: actor.sub,
       },
     });
+
+    await this.notification.notifyUserWithTemplate(
+      employeeId,
+      notificationTemplates.adjustmentApplied(
+        dto.type,
+        Number(dto.amount),
+        dto.category ?? 'manual',
+      ),
+    );
+
+    return adjustment;
   }
 
   async findAll(query: SalaryAdjustmentQueryDto, actor: AccessTokenPayload) {

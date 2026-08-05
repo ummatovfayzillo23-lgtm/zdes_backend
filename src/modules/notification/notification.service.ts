@@ -4,8 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import type { NotificationIcon, Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import { FirebaseService } from '../../common/firebase/firebase.service';
 import { trimToNull } from '../../common/utils/helpers';
 import {
   assertWithinScope,
@@ -15,10 +16,14 @@ import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
+import type { NotificationTemplate } from './notification.templates';
 
 @Injectable()
 export class NotificationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly firebase: FirebaseService,
+  ) {}
 
   async create(dto: CreateNotificationDto, actor: AccessTokenPayload) {
     if (actor.role !== 'superadmin' && !dto.userId) {
@@ -31,21 +36,111 @@ export class NotificationService {
       ? await this.ensureUserInScope(dto.userId, actor)
       : null;
 
-    return this.prisma.notification.create({
+    const title = this.normalizeRequired(
+      dto.title,
+      'Notification title is required',
+    );
+    const message = this.normalizeRequired(
+      dto.message,
+      'Notification message is required',
+    );
+
+    const notification = await this.prisma.notification.create({
       data: {
         userId,
-        title: this.normalizeRequired(
-          dto.title,
-          'Notification title is required',
-        ),
-        message: this.normalizeRequired(
-          dto.message,
-          'Notification message is required',
-        ),
+        title,
+        message,
         icon: dto.icon,
         isRead: dto.isRead,
       },
     });
+
+    await this.sendPush(userId, title, message);
+
+    return notification;
+  }
+
+  /**
+   * Creates a notification + sends push without actor/scope checks.
+   * For internal use by other modules (attendance, advance, leave, etc.).
+   */
+  async notifyUser(
+    userId: string,
+    title: string,
+    message: string,
+    icon?: NotificationIcon,
+    data?: Record<string, string>,
+  ): Promise<void> {
+    await this.prisma.notification.create({
+      data: { userId, title, message, icon },
+    });
+
+    await this.sendPush(userId, title, message, data);
+  }
+
+  async notifyUserWithTemplate(
+    userId: string,
+    template: NotificationTemplate,
+  ): Promise<void> {
+    await this.notifyUser(
+      userId,
+      template.title,
+      template.message,
+      template.icon,
+      template.data,
+    );
+  }
+
+  /**
+   * Notifies the company's admins and the employee's branch manager(s) —
+   * used for oversight (advance/leave created for an employee), never the
+   * employee themselves and never the actor who performed the action.
+   */
+  async notifyOversight(
+    companyId: string,
+    branchId: string | null,
+    excludeUserId: string,
+    template: NotificationTemplate,
+  ): Promise<void> {
+    const recipients = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        id: { not: excludeUserId },
+        OR: [
+          { companyId, role: 'admin' },
+          ...(branchId ? [{ branchId, role: 'manager' as const }] : []),
+        ],
+      },
+      select: { id: true },
+    });
+
+    await Promise.all(
+      recipients.map((recipient) =>
+        this.notifyUserWithTemplate(recipient.id, template),
+      ),
+    );
+  }
+
+  private async sendPush(
+    userId: string | null,
+    title: string,
+    body: string,
+    data?: Record<string, string>,
+  ): Promise<void> {
+    const pushTokens = await this.prisma.pushToken.findMany({
+      where: userId ? { userId } : {},
+      select: { token: true },
+    });
+
+    if (pushTokens.length === 0) {
+      return;
+    }
+
+    await this.firebase.sendToTokens(
+      pushTokens.map((pushToken) => pushToken.token),
+      { title, body },
+      data,
+    );
   }
 
   async findAll(query: NotificationQueryDto, actor: AccessTokenPayload) {

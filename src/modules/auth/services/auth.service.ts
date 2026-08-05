@@ -12,7 +12,12 @@ import { isDateExpired, trimToNull } from '../../../common/utils/helpers';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
 
-const LOGIN_ALLOWED_ROLES: UserRole[] = ['superadmin', 'admin', 'manager'];
+const LOGIN_ALLOWED_ROLES: UserRole[] = [
+  'superadmin',
+  'admin',
+  'manager',
+  'employee',
+];
 
 @Injectable()
 export class AuthService {
@@ -26,6 +31,7 @@ export class AuthService {
     login: string,
     password: string,
     meta: TokenRequestMeta,
+    pushToken?: string,
   ) {
     const normalizedLogin = trimToNull(login);
 
@@ -59,6 +65,8 @@ export class AuthService {
         lastUsedAt: new Date(),
       },
     });
+
+    await this.savePushToken(user.id, pushToken, meta);
 
     return this.buildAuthTokensResponse(user, refreshToken);
   }
@@ -114,18 +122,23 @@ export class AuthService {
     return this.buildAuthTokensResponse(tokenRecord.user);
   }
 
-  async logout(refreshToken: string) {
+  async logout(refreshToken: string, pushToken?: string) {
     const normalizedRefreshToken = trimToNull(refreshToken);
 
-    if (!normalizedRefreshToken) {
-      return { success: true };
+    if (normalizedRefreshToken) {
+      await this.prisma.refreshToken.deleteMany({
+        where: {
+          token: this.tokenService.hashRefreshToken(normalizedRefreshToken),
+        },
+      });
     }
 
-    await this.prisma.refreshToken.deleteMany({
-      where: {
-        token: this.tokenService.hashRefreshToken(normalizedRefreshToken),
-      },
-    });
+    const normalizedPushToken = trimToNull(pushToken);
+    if (normalizedPushToken) {
+      await this.prisma.pushToken.deleteMany({
+        where: { token: normalizedPushToken },
+      });
+    }
 
     return { success: true };
   }
@@ -146,11 +159,37 @@ export class AuthService {
     return this.toPublicUser(user);
   }
 
+  private async savePushToken(
+    userId: string,
+    pushToken: string | undefined,
+    meta: TokenRequestMeta,
+  ): Promise<void> {
+    const normalizedPushToken = trimToNull(pushToken);
+    if (!normalizedPushToken) {
+      return;
+    }
+
+    await this.prisma.pushToken.upsert({
+      where: { token: normalizedPushToken },
+      update: {
+        userId,
+        platform: meta.deviceType,
+        deviceName: meta.deviceName,
+        lastSeenAt: new Date(),
+      },
+      create: {
+        userId,
+        token: normalizedPushToken,
+        platform: meta.deviceType,
+        deviceName: meta.deviceName,
+        lastSeenAt: new Date(),
+      },
+    });
+  }
+
   private ensureUserCanLogin(user: User): void {
     if (!LOGIN_ALLOWED_ROLES.includes(user.role)) {
-      throw new ForbiddenException(
-        'Only superadmin, admin, and manager users can login. Employee users authenticate through turnstile integration.',
-      );
+      throw new ForbiddenException('You do not have access to login');
     }
 
     if (!user.isActive) {

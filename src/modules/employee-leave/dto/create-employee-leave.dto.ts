@@ -26,9 +26,23 @@ export class CreateEmployeeLeaveDto {
   @IsUUID()
   branchId?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      'Required unless applyToAllEmployees is true — a single employee to grant leave to',
+  })
+  @IsOptional()
   @IsUUID()
-  employeeId!: string;
+  employeeId?: string;
+
+  @ApiPropertyOptional({
+    example: false,
+    default: false,
+    description:
+      'Grant this leave to every active employee in scope (company, or branch if provided) instead of a single employeeId',
+  })
+  @IsOptional()
+  @IsBoolean()
+  applyToAllEmployees?: boolean;
 
   @ApiProperty({
     enum: LeaveType,

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { LeaveType } from '@prisma/client';
+import { LeaveRequestStatus, LeaveType } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -59,6 +59,14 @@ export class EmployeeLeaveQueryDto {
   @IsOptional()
   @IsEnum(LeaveType)
   type?: LeaveType;
+
+  @ApiPropertyOptional({
+    enum: LeaveRequestStatus,
+    example: LeaveRequestStatus.pending,
+  })
+  @IsOptional()
+  @IsEnum(LeaveRequestStatus)
+  status?: LeaveRequestStatus;
 
   @ApiPropertyOptional({
     example: false,

@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { CommonModule } from './common/common.module';
 import { AccessTokenGuard } from './common/guards/access-token.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
+import { FirebaseModule } from './common/firebase/firebase.module';
 import { RedisModule } from './common/redis/redis.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AdvanceModule } from './modules/advance/advance.module';
@@ -30,6 +32,7 @@ import { WorkScheduleModule } from './modules/work-schedule/work-schedule.module
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([
       {
         ttl: Number(process.env.RATE_LIMIT_TTL_MS ?? 60_000),
@@ -37,6 +40,7 @@ import { WorkScheduleModule } from './modules/work-schedule/work-schedule.module
       },
     ]),
     RedisModule,
+    FirebaseModule,
     CommonModule,
     AttendanceModule,
     AdvanceModule,

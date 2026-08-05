@@ -31,15 +31,20 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Login - superadmin, admin, manager' })
+  @ApiOperation({ summary: 'Login - superadmin, admin, manager, employee' })
   login(@Body() body: LoginDto, @Req() request: Request) {
-    return this.authService.login(body.login, body.password, this.getRequestMeta(request, body));
+    return this.authService.login(
+      body.login,
+      body.password,
+      this.getRequestMeta(request, body),
+      body.pushToken,
+    );
   }
 
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Refresh token - superadmin, admin, manager' })
+  @ApiOperation({ summary: 'Refresh token - superadmin, admin, manager, employee' })
   refresh(
     @Body() body: RefreshTokenDto,
     @Req() request: Request,
@@ -53,15 +58,15 @@ export class AuthController {
   @Public()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Logout - superadmin, admin, manager' })
+  @ApiOperation({ summary: 'Logout - superadmin, admin, manager, employee' })
   logout(@Body() body: RefreshTokenDto) {
-    return this.authService.logout(body.refreshToken);
+    return this.authService.logout(body.refreshToken, body.pushToken);
   }
 
   @ApiBearerAuth()
   @Get('me')
-  @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({ summary: 'Current user - superadmin, admin, manager' })
+  @Roles('superadmin', 'admin', 'manager', 'employee')
+  @ApiOperation({ summary: 'Current user - superadmin, admin, manager, employee' })
   me(@CurrentUser() user: AccessTokenPayload) {
     return this.authService.getCurrentUser(user);
   }

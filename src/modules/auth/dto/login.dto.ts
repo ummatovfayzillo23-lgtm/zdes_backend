@@ -28,4 +28,12 @@ export class LoginDto {
   @IsOptional()
   @IsString()
   deviceName?: string;
+
+  @ApiPropertyOptional({
+    description: 'Firebase device token for push notifications',
+    example: 'fcm-device-token',
+  })
+  @IsOptional()
+  @IsString()
+  pushToken?: string;
 }

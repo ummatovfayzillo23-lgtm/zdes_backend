@@ -3,8 +3,10 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   AdjustmentCategory,
   AdjustmentType,
@@ -35,6 +37,8 @@ import {
   resolveCompanyBranchScope,
   resolveScopedCompanyId,
 } from '../../../common/utils/scope.util';
+import { NotificationService } from '../../notification/notification.service';
+import { notificationTemplates } from '../../notification/notification.templates';
 import {
   ATTENDANCE_KPI_SETTING_KEY,
   AUTO_ATTENDANCE_REASON_PREFIX,
@@ -69,11 +73,196 @@ type AttendanceMetrics = {
 
 @Injectable()
 export class AttendanceService {
+  private readonly reminderLogger = new Logger('AttendanceReminder');
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly awsS3Service: AwsS3Service,
     private readonly awsFaceVerificationService: AwsFaceVerificationService,
+    private readonly notification: NotificationService,
   ) {}
+
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async remindAbsentAndNoCheckoutEmployees(): Promise<void> {
+    const employees = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        isBlocked: false,
+        companyId: { not: null },
+      },
+      include: {
+        workSchedule: true,
+        company: { select: { timezone: true } },
+      },
+    });
+
+    for (const employee of employees) {
+      try {
+        await this.remindEmployeeIfNeeded({
+          ...employee,
+          workSchedule:
+            employee.workSchedule ??
+            (await this.findDefaultWorkSchedule(employee.companyId as string)),
+          timezone: employee.company?.timezone ?? DEFAULT_TIMEZONE,
+        });
+      } catch (error) {
+        this.reminderLogger.error(
+          `Failed to check attendance reminder for employee ${employee.id}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+
+  private async remindEmployeeIfNeeded(
+    employee: UserWithSchedule,
+  ): Promise<void> {
+    if (!employee.workSchedule?.isActive) {
+      return;
+    }
+
+    const now = new Date();
+    const today = toZonedDateOnly(now, employee.timezone);
+    const workDays = this.extractWorkDays(employee.workSchedule.workDays);
+
+    if (!workDays.includes(getWorkDayNumber(today))) {
+      return;
+    }
+
+    const scheduledEnd = parseTimeToZonedDate(
+      today,
+      employee.workSchedule.endTime,
+      employee.timezone,
+    );
+
+    if (now.getTime() < scheduledEnd.getTime()) {
+      return;
+    }
+
+    if (await this.hasApprovedLeave(employee.id, today)) {
+      return;
+    }
+
+    const attendance = await this.prisma.attendance.findUnique({
+      where: {
+        employeeId_date: {
+          employeeId: employee.id,
+          date: today,
+        },
+      },
+    });
+
+    const dayStartUtc = parseTimeToZonedDate(today, '00:00', employee.timezone);
+    const name = trimToNull(employee.firstName);
+
+    if (!attendance?.checkIn) {
+      await this.notifyOnce(
+        employee.id,
+        notificationTemplates.attendanceAbsent(name),
+        dayStartUtc,
+      );
+      return;
+    }
+
+    if (!attendance.checkOut) {
+      await this.notifyOnce(
+        employee.id,
+        notificationTemplates.attendanceNoCheckout(name),
+        dayStartUtc,
+      );
+    }
+  }
+
+  private async notifyOnce(
+    userId: string,
+    template: ReturnType<typeof notificationTemplates.attendanceAbsent>,
+    sinceUtc: Date,
+  ): Promise<void> {
+    const alreadySent = await this.prisma.notification.findFirst({
+      where: {
+        userId,
+        title: template.title,
+        createdAt: { gte: sinceUtc },
+      },
+      select: { id: true },
+    });
+
+    if (alreadySent) {
+      return;
+    }
+
+    await this.notification.notifyUserWithTemplate(userId, template);
+  }
+
+  private async hasApprovedLeave(
+    employeeId: string,
+    date: Date,
+  ): Promise<boolean> {
+    const leave = await this.prisma.employeeLeave.findFirst({
+      where: {
+        employeeId,
+        status: 'approved',
+        fromDate: { lte: date },
+        toDate: { gte: date },
+      },
+      select: { id: true },
+    });
+
+    return leave !== null;
+  }
+
+  /**
+   * Approved hourly leave (max 3h) covering the start of the shift on `date`
+   * shifts the "you must be here by" line forward — lateness is only counted
+   * for minutes beyond the approved window.
+   */
+  private async getApprovedLeaveHours(
+    employeeId: string,
+    date: Date,
+  ): Promise<number> {
+    const leave = await this.prisma.employeeLeave.findFirst({
+      where: {
+        employeeId,
+        status: 'approved',
+        durationType: 'hourly',
+        fromDate: { lte: date },
+        toDate: { gte: date },
+      },
+      select: { leaveHours: true },
+    });
+
+    return leave?.leaveHours ?? 0;
+  }
+
+  private async notifyLate(
+    employee: UserWithSchedule,
+    lateMinutes: number,
+  ): Promise<void> {
+    await this.notification.notifyUserWithTemplate(
+      employee.id,
+      notificationTemplates.attendanceLate(
+        trimToNull(employee.firstName),
+        lateMinutes,
+      ),
+    );
+  }
+
+  private async notifyAdjustments(
+    employee: UserWithSchedule,
+    adjustments: AttendanceAdjustmentDto[],
+  ): Promise<void> {
+    for (const adjustment of adjustments) {
+      const type =
+        adjustment.type === AdjustmentType.bonus ? 'bonus' : 'penalty';
+      await this.notification.notifyUserWithTemplate(
+        employee.id,
+        notificationTemplates.adjustmentApplied(
+          type,
+          adjustment.amount,
+          adjustment.category,
+        ),
+      );
+    }
+  }
 
   async getKpiTemplate(
     companyId: string,
@@ -149,13 +338,19 @@ export class AttendanceService {
       throw new ConflictException('Employee already checked in for this date');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const approvedLeaveHours = await this.getApprovedLeaveHours(
+      employee.id,
+      attendanceDate,
+    );
+
+    const result = await this.prisma.$transaction(async (tx) => {
       const metrics = this.calculateAttendanceMetrics(
         employee.workSchedule,
         attendanceDate,
         eventTime,
         existingAttendance?.checkOut ?? null,
         employee.timezone,
+        approvedLeaveHours,
       );
 
       const attendance = existingAttendance
@@ -204,8 +399,17 @@ export class AttendanceService {
         actor.sub,
       );
 
-      return this.toResponse(attendance, adjustments, similarity);
+      return { attendance, adjustments };
     });
+
+    if (
+      result.attendance.lateMinutes > 0 &&
+      !(await this.hasApprovedLeave(employee.id, attendanceDate))
+    ) {
+      await this.notifyLate(employee, result.attendance.lateMinutes);
+    }
+
+    return this.toResponse(result.attendance, result.adjustments, similarity);
   }
 
   async checkOut(dto: AttendanceCheckOutDto, actor: AccessTokenPayload) {
@@ -246,13 +450,19 @@ export class AttendanceService {
       throw new ConflictException('Employee already checked out for this date');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const approvedLeaveHours = await this.getApprovedLeaveHours(
+      employee.id,
+      attendanceDate,
+    );
+
+    const result = await this.prisma.$transaction(async (tx) => {
       const metrics = this.calculateAttendanceMetrics(
         employee.workSchedule,
         attendanceDate,
         existingAttendance.checkIn,
         eventTime,
         employee.timezone,
+        approvedLeaveHours,
       );
 
       const attendance = await tx.attendance.update({
@@ -280,8 +490,12 @@ export class AttendanceService {
         actor.sub,
       );
 
-      return this.toResponse(attendance, adjustments, similarity);
+      return { attendance, adjustments };
     });
+
+    await this.notifyAdjustments(employee, result.adjustments);
+
+    return this.toResponse(result.attendance, result.adjustments, similarity);
   }
 
   async findAll(query: AttendanceQueryDto, actor: AccessTokenPayload) {
@@ -397,6 +611,7 @@ export class AttendanceService {
     checkIn: Date | null,
     checkOut: Date | null,
     timezone: string,
+    approvedLeaveHours = 0,
   ): AttendanceMetrics {
     const workedMinutes = calculateMinutesDifference(checkIn, checkOut);
 
@@ -437,11 +652,16 @@ export class AttendanceService {
       timezone,
     );
     const graceMinutes = workSchedule.graceMinutes ?? 0;
+    // Approved hourly leave at the start of the shift pushes the
+    // "must be here by" line forward — lateness only counts beyond it.
+    const effectiveStart = new Date(
+      scheduledStart.getTime() + approvedLeaveHours * 60 * 60 * 1000,
+    );
 
     const lateMinutes = checkIn
       ? Math.max(
           0,
-          calculateMinutesDifference(scheduledStart, checkIn) - graceMinutes,
+          calculateMinutesDifference(effectiveStart, checkIn) - graceMinutes,
         )
       : 0;
     const earlyLeaveMinutes =
