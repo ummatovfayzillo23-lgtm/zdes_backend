@@ -1,5 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
@@ -7,6 +8,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { HttpCacheInterceptor } from './common/interceptors/http-cache.interceptor';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { CacheService } from './common/redis/cache.service';
+import { UPLOADS_ROOT } from './common/upload/image-upload.util';
 
 const API_PREFIX = 'api/v1';
 const SWAGGER_PATH = 'docs';
@@ -14,9 +16,11 @@ const SWAGGER_USERNAME = 'login';
 const SWAGGER_PASSWORD = '1234';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const port = Number(process.env.PORT ?? 3000);
   const host = process.env.HOST ?? 'localhost';
+
+  app.useStaticAssets(UPLOADS_ROOT, { prefix: '/uploads' });
 
   app.use((request: Request, response: Response, next: NextFunction) => {
     if (request.path !== '/' || !['GET', 'HEAD'].includes(request.method)) {
@@ -72,7 +76,9 @@ async function bootstrap() {
 
   console.log(`App running: http://${host}:${port}/${API_PREFIX}`);
   console.log(`Swagger docs: http://${host}:${port}/${swaggerFullPath}`);
-  console.log(`Swagger basic auth -> username: ${SWAGGER_USERNAME}, password: ${SWAGGER_PASSWORD}`);
+  console.log(
+    `Swagger basic auth -> username: ${SWAGGER_USERNAME}, password: ${SWAGGER_PASSWORD}`,
+  );
 }
 bootstrap();
 
@@ -85,7 +91,9 @@ function protectSwagger(
 
   if (authorization?.startsWith('Basic ')) {
     const base64Credentials = authorization.slice('Basic '.length);
-    const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
+    const credentials = Buffer.from(base64Credentials, 'base64').toString(
+      'utf8',
+    );
     const [username, password] = credentials.split(':');
 
     if (username === SWAGGER_USERNAME && password === SWAGGER_PASSWORD) {

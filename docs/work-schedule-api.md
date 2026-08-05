@@ -2,7 +2,20 @@
 
 Base path: `/work-schedules`
 Auth: Bearer JWT required (`@ApiBearerAuth`)
-Roles: `superadmin`, `admin` only (`@Roles('superadmin', 'admin')` on the whole controller)
+Roles: `superadmin`, `admin` on the whole controller — a few sub-endpoints narrow this further (see each section)
+
+## Architecture: one schedule, many companies
+
+A `WorkSchedule` is a shift **template** (name, start/end time, work days, grace minutes) owned by the company that created it (`WorkSchedule.companyId`, the *owner*). It can be **attached** to other companies for reuse via the `WorkScheduleCompany` join table, so one template no longer has to be duplicated per company.
+
+Everything that is inherently per-company lives on the join row (`WorkScheduleCompany`), not on the schedule itself:
+
+| Field | Lives on | Meaning |
+|---|---|---|
+| `name`, `startTime`, `endTime`, `workDays`, `graceMinutes`, `isActive` | `WorkSchedule` | shared by every company using the template |
+| `companyId` (link), `branchId`, `isDefault` | `WorkScheduleCompany` | scoped to **one** company's use of the template |
+
+So the same "09:00–18:00" template can be company A's default, attached-but-not-default in company B, and not attached at all in company C.
 
 ## Scoping rules (applies to every endpoint)
 
@@ -11,36 +24,63 @@ Roles: `superadmin`, `admin` only (`@Roles('superadmin', 'admin')` on the whole 
 | `superadmin` | must be provided explicitly on create (`companyId` in body) | can act on any company |
 | `admin` | auto-filled from the admin's own token | can only act within their own company; sending a different `companyId` throws `403 Forbidden` |
 
-`branchId` is optional everywhere. If provided, it must belong to the resolved `companyId` or a `409 Conflict` is thrown.
+- **Owner-only actions** (`update`, `toggle-status`, `delete`): only the owning company's admin (or superadmin) may perform these — they change the template for every company using it.
+- **Attach to a new company**: `superadmin` only, since it crosses company boundaries.
+- **Detach / set-default for a company**: that company's own admin (or superadmin) — self-service, doesn't require owning the template.
+- **Read** (`findOne`, and anything scoped by `findAll`): allowed if the actor's company owns the schedule **or** has it attached.
+
+`branchId` is optional everywhere it appears. If provided, it must belong to the resolved `companyId` or a `409 Conflict` is thrown.
 
 ---
 
-## Data model (`WorkSchedule`)
+## Data model
+
+**`WorkSchedule` (template, response shape via `findOne`/`create`/`update`)**
 
 ```ts
 {
-  id: string;              // uuid
-  companyId: string;       // uuid
-  branchId: string | null; // uuid
-  name: string;             // unique per companyId
-  startTime: string;        // "HH:mm"
-  endTime: string;          // "HH:mm"
-  workDays: number[];       // 1=Monday ... 7=Sunday
-  graceMinutes: number;     // default 0, allowed late minutes before counted as "late"
-  isDefault: boolean;       // company-wide fallback schedule (see below) — NOT settable by the client on create/update
-  isActive: boolean;        // default true
-  createdAt: string;        // ISO datetime
-  updatedAt: string;        // ISO datetime
+  id: string;                // uuid
+  ownerCompanyId: string;    // uuid — the company that created it; only it can edit/delete
+  name: string;               // unique per ownerCompanyId
+  startTime: string;          // "HH:mm"
+  endTime: string;            // "HH:mm"
+  workDays: number[];         // 1=Monday ... 7=Sunday
+  graceMinutes: number;       // default 0, allowed late minutes before counted as "late"
+  isActive: boolean;          // default true — deactivating hides it everywhere it's attached
+  companies: {                // every company this schedule is attached to, including the owner
+    companyId: string;
+    branchId: string | null;
+    isDefault: boolean;       // is this the default schedule for THAT company
+    attachedAt: string;
+  }[];
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+**List item shape (`GET /work-schedules`)** — flattened per (schedule × company) attachment, since a schedule attached to 3 companies produces 3 rows:
+
+```ts
+{
+  id: string;             // WorkSchedule id
+  ownerCompanyId: string;
+  companyId: string;      // the company this row is scoped to
+  branchId: string | null;
+  isDefault: boolean;
+  name, startTime, endTime, workDays, graceMinutes, isActive: ...;
+  attachedAt: string;
+  createdAt: string;
+  updatedAt: string;
 }
 ```
 
 ### `isDefault` semantics (backend-controlled, not client input)
 
-- Creating a schedule **without** `userId` → it is a **company-wide** schedule → backend automatically sets `isDefault: true`, and clears `isDefault` on any other schedule in that company.
-- Creating a schedule **with** `userId` → it is assigned to **that single user only** → backend automatically sets `isDefault: false`.
-- Only one schedule per company can have `isDefault: true` at a time.
-- To later promote a different existing schedule to be the company default, use `PATCH /work-schedules/:id/set-default`.
-- Attendance calculation fallback: if a user has no individually assigned schedule (`user.workScheduleId` is `null`), attendance uses the company's `isDefault: true` + `isActive: true` schedule automatically.
+- Creating a schedule **without** `userId` → the owner company's attachment automatically becomes `isDefault: true`, clearing any other default **for that company**.
+- Creating a schedule **with** `userId` → the owner company's attachment is `isDefault: false`, and the schedule is assigned directly to that user.
+- Only one attachment per company can have `isDefault: true` at a time (enforced per-company, not globally — a schedule can be default in several companies simultaneously).
+- To promote a schedule to be a company's default later, use `PATCH /work-schedules/:id/companies/:companyId/set-default`.
+- Attendance calculation fallback: if a user has no individually assigned schedule (`user.workScheduleId` is `null`), attendance uses the `isDefault: true` + `isActive: true` attachment for **that user's company**.
 
 ---
 
@@ -50,50 +90,26 @@ Roles: `superadmin`, `admin` only (`@Roles('superadmin', 'admin')` on the whole 
 
 `POST /work-schedules`
 
+Creates a new template **and** its first attachment (to the owner company).
+
 **Request body** (`CreateWorkScheduleDto`)
 
 ```json
 {
-  "companyId": "b1e7c1b2-....",     // required for superadmin, ignored/auto-filled for admin
-  "branchId": "a2f8d3c4-....",      // optional
+  "companyId": "b1e7c1b2-....",     // required for superadmin, ignored/auto-filled for admin — becomes the OWNER
+  "branchId": "a2f8d3c4-....",      // optional, scopes the owner company's attachment
   "name": "Standart ish kuni",
   "startTime": "09:00",
   "endTime": "18:00",
   "workDays": [1, 2, 3, 4, 5],
   "graceMinutes": 15,               // optional, default 0, 0-120
-  "userId": "c3a9e5f6-...."          // optional — if present, schedule belongs to this user only
-}
-```
-
-**Validation**
-- `name`: string, 1-255 chars, required
-- `startTime` / `endTime`: `HH:mm` format, required
-- `workDays`: array of ints 1-7, 1-7 items, required
-- `graceMinutes`: int 0-120, optional
-- `companyId`, `branchId`, `userId`: UUID, optional
-
-**Response `201`**
-
-```json
-{
-  "id": "5f2b6c1a-....",
-  "companyId": "b1e7c1b2-....",
-  "branchId": "a2f8d3c4-....",
-  "name": "Standart ish kuni",
-  "startTime": "09:00",
-  "endTime": "18:00",
-  "workDays": [1, 2, 3, 4, 5],
-  "graceMinutes": 15,
-  "isDefault": true,
-  "isActive": true,
-  "createdAt": "2026-07-29T06:00:00.000Z",
-  "updatedAt": "2026-07-29T06:00:00.000Z"
+  "userId": "c3a9e5f6-...."          // optional — if present, schedule is assigned to this user only (not the company default)
 }
 ```
 
 **Errors**
 - `404 Not Found` — company / branch / user not found
-- `409 Conflict` — branch doesn't belong to company; user belongs to another company; schedule name already exists in company
+- `409 Conflict` — branch doesn't belong to company; user belongs to another company; schedule name already exists for that owner company
 
 ---
 
@@ -101,46 +117,16 @@ Roles: `superadmin`, `admin` only (`@Roles('superadmin', 'admin')` on the whole 
 
 `GET /work-schedules`
 
-**Query params** (`WorkScheduleQueryDto`)
+**Query params** (`WorkScheduleQueryDto`) — `companyId` now filters by **attachment**, not ownership (so an admin sees every schedule usable in their company, whether they own it or it was shared with them).
 
 | Param | Type | Notes |
 |---|---|---|
-| `companyId` | uuid | ignored for `admin` (auto-scoped) |
-| `branchId` | uuid | |
+| `companyId` | uuid | ignored for `admin` (auto-scoped to own company) |
+| `branchId` | uuid | filters by the attachment's branch |
 | `search` | string | matches `name` (case-insensitive `contains`) |
-| `isDefault` | boolean | `true`/`false` |
-| `isActive` | boolean | `true`/`false` |
-| `page` | int, default `1` | |
-| `limit` | int, default `10`, max `100` | |
-
-Example: `GET /work-schedules?search=standart&isActive=true&page=1&limit=10`
-
-**Response `200`**
-
-```json
-{
-  "items": [
-    {
-      "id": "5f2b6c1a-....",
-      "companyId": "b1e7c1b2-....",
-      "branchId": null,
-      "name": "Standart ish kuni",
-      "startTime": "09:00",
-      "endTime": "18:00",
-      "workDays": [1, 2, 3, 4, 5],
-      "graceMinutes": 15,
-      "isDefault": true,
-      "isActive": true,
-      "createdAt": "2026-07-29T06:00:00.000Z",
-      "updatedAt": "2026-07-29T06:00:00.000Z"
-    }
-  ],
-  "total": 1,
-  "page": 1,
-  "limit": 10,
-  "totalPages": 1
-}
-```
+| `isDefault` | boolean | filters by the attachment's `isDefault` |
+| `isActive` | boolean | filters by the template's `isActive` |
+| `page` / `limit` | int | pagination, `limit` max 100 |
 
 ---
 
@@ -148,19 +134,19 @@ Example: `GET /work-schedules?search=standart&isActive=true&page=1&limit=10`
 
 `GET /work-schedules/:id`
 
-**Response `200`** — same shape as a single item above.
+Returns the template plus **every company it's attached to** (see `companies[]` in the data model above) — the direct way to answer "which companies use this schedule".
 
 **Errors**
-- `404 Not Found` — not found
-- `403 Forbidden` — belongs to another company/branch than actor's scope
+- `404 Not Found`
+- `403 Forbidden` — actor's company neither owns nor has this schedule attached
 
 ---
 
 ### 4. Update work schedule
 
-`PATCH /work-schedules/:id`
+`PATCH /work-schedules/:id` — **owner company only**
 
-**Request body** (`UpdateWorkScheduleDto` — all fields from create, all optional; `isDefault` is not part of the DTO — it can never be set here)
+Edits the shared template fields. Cannot touch `companyId`, `branchId`, or `userId` (those live on attachments now).
 
 ```json
 {
@@ -168,120 +154,100 @@ Example: `GET /work-schedules?search=standart&isActive=true&page=1&limit=10`
   "startTime": "08:30",
   "endTime": "17:30",
   "workDays": [1, 2, 3, 4, 5, 6],
-  "graceMinutes": 10,
-  "branchId": null
+  "graceMinutes": 10
 }
 ```
 
-**Response `200`** — updated schedule object (same shape as create response).
-
-**Errors** — same as create, plus `404` if the schedule itself doesn't exist.
-
-**Note:** to reassign a schedule between users, use `assign-user` / `unassign-user` below, not this endpoint.
+**Errors** — `403 Forbidden` if actor isn't the owner company; `409 Conflict` on duplicate name; `404` if not found.
 
 ---
 
 ### 5. Toggle active status
 
-`PATCH /work-schedules/:id/toggle-status`
-
-**Request body** (`ToggleWorkScheduleStatusDto`)
+`PATCH /work-schedules/:id/toggle-status` — **owner company only**
 
 ```json
 { "isActive": false }
 ```
 
-If `isActive` is omitted, it flips the current value.
-
-**Response `200`** — updated schedule object.
+Deactivates the template everywhere it's attached (affects every company using it). If `isActive` is omitted, it flips the current value.
 
 ---
 
-### 6. Set as company default
+### 6. Attach to another company
 
-`PATCH /work-schedules/:id/set-default`
+`POST /work-schedules/:id/companies` — **superadmin only** (crosses company boundaries)
 
-No request body.
+```json
+{
+  "companyId": "d4f1a2b3-....",
+  "branchId": "e5a2b3c4-....",   // optional, must belong to companyId
+  "isDefault": false             // optional, default false
+}
+```
 
-Marks this schedule as `isDefault: true` and clears `isDefault` on every other schedule in the same company.
-
-**Response `200`** — updated schedule object (`isDefault: true`).
+**Errors**
+- `404 Not Found` — schedule / company / branch not found
+- `409 Conflict` — already attached to that company
 
 ---
 
-### 7. Assign to user
+### 7. Detach from a company
+
+`DELETE /work-schedules/:id/companies/:companyId` — that company's admin, or superadmin
+
+Cannot detach the **owner** company (delete the schedule instead). Any users of that company currently on this schedule are reset to `workScheduleId: null` (they fall back to their company's default).
+
+**Errors**
+- `403 Forbidden` — admin targeting a company that isn't their own
+- `409 Conflict` — `companyId` is the owner
+- `404 Not Found` — not attached to that company
+
+---
+
+### 8. Set as a company's default
+
+`PATCH /work-schedules/:id/companies/:companyId/set-default` — that company's admin, or superadmin
+
+No request body. Marks this schedule as `isDefault: true` for `companyId` and clears `isDefault` on every other schedule attached to that same company. Does not affect other companies' defaults.
+
+**Errors** — `404 Not Found` if not attached to that company; `403 Forbidden` if admin targets another company.
+
+---
+
+### 9. Assign to user
 
 `PATCH /work-schedules/:id/assign-user`
 
-**Request body** (`AssignUserDto`)
-
 ```json
 { "userId": "c3a9e5f6-...." }
 ```
 
-Sets `user.workScheduleId = id`. Fails if the user belongs to a different company than the schedule.
-
-**Response `200`**
-
-```json
-{
-  "id": "c3a9e5f6-....",
-  "login": "j.doe",
-  "companyId": "b1e7c1b2-....",
-  "workScheduleId": "5f2b6c1a-...."
-}
-```
-
-**Errors**
-- `404 Not Found` — schedule or user not found
-- `409 Conflict` — schedule and user belong to different companies
+Sets `user.workScheduleId = id`. Requires the schedule to be **attached to the user's company** (owner or via attach) — otherwise `409 Conflict`.
 
 ---
 
-### 8. Unassign from user
+### 10. Unassign from user
 
 `PATCH /work-schedules/:id/unassign-user`
 
-**Request body** (`AssignUserDto`)
-
 ```json
 { "userId": "c3a9e5f6-...." }
 ```
 
-Sets `user.workScheduleId = null`. The user then falls back to the company's `isDefault: true` schedule for attendance calculation (if one exists).
-
-**Response `200`**
-
-```json
-{
-  "id": "c3a9e5f6-....",
-  "login": "j.doe",
-  "companyId": "b1e7c1b2-....",
-  "workScheduleId": null
-}
-```
+Sets `user.workScheduleId = null`. The user then falls back to their company's `isDefault: true` attachment for attendance calculation, if one exists.
 
 ---
 
-### 9. Delete work schedule
+### 11. Delete work schedule
 
-`DELETE /work-schedules/:id`
+`DELETE /work-schedules/:id` — **owner company only**
 
-**Response `200`**
-
-```json
-{ "success": true, "id": "5f2b6c1a-...." }
-```
-
-**Errors**
-- `404 Not Found`
-- `403 Forbidden` — outside actor's scope
+Cascades: every `WorkScheduleCompany` attachment is deleted; any user still on this schedule (in any company) falls back to `workScheduleId: null`.
 
 ---
 
 ## Error format (all endpoints)
-
-Standard Nest exception shape:
 
 ```json
 {
@@ -293,9 +259,9 @@ Standard Nest exception shape:
 
 | Code | When |
 |---|---|
-| `403 Forbidden` | actor tries to touch a company/branch outside their scope |
-| `404 Not Found` | company / branch / user / schedule not found |
-| `409 Conflict` | duplicate name, branch/user mismatch with company |
+| `403 Forbidden` | actor tries to touch a company/branch/schedule outside their scope |
+| `404 Not Found` | company / branch / user / schedule / attachment not found |
+| `409 Conflict` | duplicate name, branch/user mismatch, already attached, detaching the owner |
 
 ---
 
@@ -304,5 +270,5 @@ Standard Nest exception shape:
 `AttendanceService.findEmployeeOrThrow` resolves the *effective* schedule for a check-in/check-out as:
 
 1. `user.workScheduleId` → the individually assigned schedule, if set.
-2. Otherwise → the company's `WorkSchedule` where `isDefault: true` and `isActive: true`.
+2. Otherwise → the `WorkScheduleCompany` row where `companyId = user.companyId`, `isDefault: true`, and the linked schedule's `isActive: true`.
 3. If neither exists, no late/early/overtime metrics are computed (only raw worked minutes).

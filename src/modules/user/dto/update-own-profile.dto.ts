@@ -10,5 +10,4 @@ export class UpdateOwnProfileDto extends PickType(CreateUserDto, [
   'address',
   'passportSerial',
   'dateOfBirth',
-  'avatarUrl',
 ] as const) {}

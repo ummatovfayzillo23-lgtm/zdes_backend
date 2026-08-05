@@ -1,4 +1,10 @@
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import {
   Body,
   Controller,
@@ -9,8 +15,12 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { imageUploadOptions } from '../../common/upload/image-upload.util';
 import { CompanyQueryDto } from './dto/company-query.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { ToggleCompanyStatusDto } from './dto/toggle-company-status.dto';
@@ -44,8 +54,28 @@ export class CompanyController {
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update company - superadmin' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCompanyDto) {
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCompanyDto,
+  ) {
     return this.companyService.update(id, dto);
+  }
+
+  @Post(':id/logo')
+  @ApiOperation({ summary: 'Upload company logo - superadmin' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', imageUploadOptions('logos')))
+  uploadLogo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.companyService.updateLogo(id, file);
   }
 
   @Patch(':id/toggle-status')

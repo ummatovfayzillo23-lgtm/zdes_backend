@@ -24,6 +24,7 @@ model Company {
   departments       Department[]
   positions         Position[]
   workSchedules     WorkSchedule[]
+  workScheduleLinks WorkScheduleCompany[]
   terminals         Terminal[]
   holidays          Holiday[]
   employeeLeaves    EmployeeLeave[]
@@ -50,11 +51,11 @@ model Branch {
   radius    Int?    @default(100)
   isActive  Boolean @default(true)
 
-  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  users          User[]
-  departments    Department[]
-  workSchedules  WorkSchedule[]
-  terminals      Terminal[]
+  company           Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  users             User[]
+  departments       Department[]
+  workScheduleLinks WorkScheduleCompany[]
+  terminals         Terminal[]
   holidays       Holiday[]
   employeeLeaves EmployeeLeave[]
   attendances    Attendance[]
@@ -174,10 +175,11 @@ model User {
   @@index([isActive])
 }
 
+/// A schedule is owned/managed by one company (companyId) but can be
+/// attached to other companies for reuse via WorkScheduleCompany.
 model WorkSchedule {
-  id        String  @id @default(uuid()) @db.Uuid
-  companyId String  @db.Uuid
-  branchId  String? @db.Uuid
+  id        String @id @default(uuid()) @db.Uuid
+  companyId String @db.Uuid
 
   name         String @db.VarChar(255)
   startTime    String @db.VarChar(10)
@@ -185,21 +187,42 @@ model WorkSchedule {
   workDays     Json   @db.Json
   graceMinutes Int    @default(0)
 
-  isDefault Boolean @default(false)
-  isActive  Boolean @default(true)
+  isActive Boolean @default(true)
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  branch  Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
-  users   User[]
+  company   Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  companies WorkScheduleCompany[]
+  users     User[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
   @@unique([companyId, name])
   @@index([companyId])
+  @@index([isActive])
+}
+
+/// Attaches a WorkSchedule to a company (its owner or another company reusing
+/// it). isDefault/branchId are scoped per attachment since the same schedule
+/// can be the default in one company and not another.
+model WorkScheduleCompany {
+  id             String  @id @default(uuid()) @db.Uuid
+  workScheduleId String  @db.Uuid
+  companyId      String  @db.Uuid
+  branchId       String? @db.Uuid
+
+  isDefault Boolean @default(false)
+
+  workSchedule WorkSchedule @relation(fields: [workScheduleId], references: [id], onDelete: Cascade)
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch       Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([workScheduleId, companyId])
+  @@index([companyId])
   @@index([branchId])
   @@index([isDefault])
-  @@index([isActive])
 }
 
 model Terminal {

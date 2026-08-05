@@ -881,9 +881,11 @@ export class AttendanceService {
   private async findDefaultWorkSchedule(
     companyId: string,
   ): Promise<WorkSchedule | null> {
-    return this.prisma.workSchedule.findFirst({
-      where: { companyId, isDefault: true, isActive: true },
+    const link = await this.prisma.workScheduleCompany.findFirst({
+      where: { companyId, isDefault: true, workSchedule: { isActive: true } },
+      include: { workSchedule: true },
     });
+    return link?.workSchedule ?? null;
   }
 
   private async ensureTerminalBelongsToCompany(

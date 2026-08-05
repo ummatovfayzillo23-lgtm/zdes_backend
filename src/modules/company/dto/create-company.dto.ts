@@ -50,14 +50,6 @@ export class CreateCompanyDto {
   address?: string;
 
   @ApiPropertyOptional({
-    example: 'https://cdn.example.com/logos/zdes.png',
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(500)
-  logoUrl?: string;
-
-  @ApiPropertyOptional({
     example: 'Asia/Tashkent',
     default: 'Asia/Tashkent',
     description:

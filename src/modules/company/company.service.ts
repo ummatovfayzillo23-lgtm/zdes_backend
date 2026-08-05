@@ -6,6 +6,10 @@ import {
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
+import {
+  assertFileProvided,
+  buildUploadUrl,
+} from '../../common/upload/image-upload.util';
 import { CompanyQueryDto } from './dto/company-query.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { ToggleCompanyStatusDto } from './dto/toggle-company-status.dto';
@@ -26,7 +30,6 @@ export class CompanyService {
         phone: trimToNull(dto.phone),
         email: trimToNull(dto.email),
         address: trimToNull(dto.address),
-        logoUrl: trimToNull(dto.logoUrl),
         ...(dto.timezone ? { timezone: dto.timezone } : {}),
       },
     });
@@ -77,7 +80,9 @@ export class CompanyService {
 
   async update(id: string, dto: UpdateCompanyDto) {
     await this.findCompanyByIdOrThrow(id);
-    const normalizedName = dto.name ? this.normalizeRequiredName(dto.name) : undefined;
+    const normalizedName = dto.name
+      ? this.normalizeRequiredName(dto.name)
+      : undefined;
 
     if (normalizedName) {
       await this.ensureNameIsUnique(normalizedName, id);
@@ -87,13 +92,26 @@ export class CompanyService {
       where: { id },
       data: {
         ...(normalizedName ? { name: normalizedName } : {}),
-        ...(dto.legalName !== undefined ? { legalName: trimToNull(dto.legalName) } : {}),
+        ...(dto.legalName !== undefined
+          ? { legalName: trimToNull(dto.legalName) }
+          : {}),
         ...(dto.phone !== undefined ? { phone: trimToNull(dto.phone) } : {}),
         ...(dto.email !== undefined ? { email: trimToNull(dto.email) } : {}),
-        ...(dto.address !== undefined ? { address: trimToNull(dto.address) } : {}),
-        ...(dto.logoUrl !== undefined ? { logoUrl: trimToNull(dto.logoUrl) } : {}),
+        ...(dto.address !== undefined
+          ? { address: trimToNull(dto.address) }
+          : {}),
         ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
       },
+    });
+  }
+
+  async updateLogo(id: string, file?: Express.Multer.File) {
+    await this.findCompanyByIdOrThrow(id);
+    const uploadedFile = assertFileProvided(file);
+
+    return this.prisma.company.update({
+      where: { id },
+      data: { logoUrl: buildUploadUrl('logos', uploadedFile.filename) },
     });
   }
 
@@ -122,7 +140,10 @@ export class CompanyService {
     return company;
   }
 
-  private async ensureNameIsUnique(name: string, excludedId?: string): Promise<void> {
+  private async ensureNameIsUnique(
+    name: string,
+    excludedId?: string,
+  ): Promise<void> {
     const existing = await this.prisma.company.findFirst({
       where: { name, ...(excludedId ? { id: { not: excludedId } } : {}) },
     });

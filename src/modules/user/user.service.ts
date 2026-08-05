@@ -9,6 +9,10 @@ import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { PasswordService } from '../auth/services/password.service';
 import { trimToNull } from '../../common/utils/helpers';
 import {
+  assertFileProvided,
+  buildUploadUrl,
+} from '../../common/upload/image-upload.util';
+import {
   assertWithinScope,
   resolveCompanyBranchScope,
   resolveScopedCompanyId,
@@ -114,7 +118,6 @@ export class UserService {
         address: trimToNull(dto.address),
         passportSerial: trimToNull(dto.passportSerial),
         dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null,
-        avatarUrl: trimToNull(dto.avatarUrl),
         baseSalary: dto.baseSalary ?? null,
       },
       select: USER_SELECT,
@@ -312,9 +315,6 @@ export class UserService {
         ...(dto.dateOfBirth !== undefined
           ? { dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null }
           : {}),
-        ...(dto.avatarUrl !== undefined
-          ? { avatarUrl: trimToNull(dto.avatarUrl) }
-          : {}),
         ...(dto.baseSalary !== undefined
           ? { baseSalary: dto.baseSalary ?? null }
           : {}),
@@ -352,10 +352,49 @@ export class UserService {
         ...(dto.dateOfBirth !== undefined
           ? { dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null }
           : {}),
-        ...(dto.avatarUrl !== undefined
-          ? { avatarUrl: trimToNull(dto.avatarUrl) }
-          : {}),
       },
+      select: USER_SELECT,
+    });
+  }
+
+  async updateOwnAvatar(actor: AccessTokenPayload, file?: Express.Multer.File) {
+    const uploadedFile = assertFileProvided(file);
+
+    return this.prisma.user.update({
+      where: { id: actor.sub },
+      data: { avatarUrl: buildUploadUrl('avatars', uploadedFile.filename) },
+      select: USER_SELECT,
+    });
+  }
+
+  async updateAvatar(
+    id: string,
+    actor: AccessTokenPayload,
+    file?: Express.Multer.File,
+  ) {
+    const user = await this.findUserByIdOrThrow(id);
+    this.assertUserWithinScope(actor, user);
+    const uploadedFile = assertFileProvided(file);
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { avatarUrl: buildUploadUrl('avatars', uploadedFile.filename) },
+      select: USER_SELECT,
+    });
+  }
+
+  async updateFaceImage(
+    id: string,
+    actor: AccessTokenPayload,
+    file?: Express.Multer.File,
+  ) {
+    const user = await this.findUserByIdOrThrow(id);
+    this.assertUserWithinScope(actor, user);
+    const uploadedFile = assertFileProvided(file);
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { faceImageUrl: buildUploadUrl('faces', uploadedFile.filename) },
       select: USER_SELECT,
     });
   }

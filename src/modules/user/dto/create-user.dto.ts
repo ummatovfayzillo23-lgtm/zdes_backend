@@ -114,12 +114,6 @@ export class CreateUserDto {
   @IsISO8601({ strict: true })
   dateOfBirth?: string;
 
-  @ApiPropertyOptional({ example: 'https://cdn.example.com/avatars/john.png' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(500)
-  avatarUrl?: string;
-
   @ApiPropertyOptional({ example: 5000000 })
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
