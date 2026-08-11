@@ -1,9 +1,10 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { PayrollStatus, type Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/congif/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
 import {
@@ -14,6 +15,8 @@ import {
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreatePayrollDto } from './dto/create-payroll.dto';
 import { PayrollQueryDto } from './dto/payroll-query.dto';
+import { PayrollStatsQueryDto } from './dto/payroll-stats-query.dto';
+import { RecordPayrollPaymentDto } from './dto/record-payroll-payment.dto';
 import { UpdatePayrollDto } from './dto/update-payroll.dto';
 
 @Injectable()
@@ -62,6 +65,7 @@ export class PayrollService {
     const skip = (page - 1) * limit;
     const scope = resolveCompanyBranchScope(actor, {
       companyId: query.companyId,
+      branchId: query.branchId,
     });
 
     const where: Prisma.PayrollWhereInput = {
@@ -158,6 +162,121 @@ export class PayrollService {
     await this.assertRecordInScope(actor, payroll);
     await this.prisma.payroll.delete({ where: { id } });
     return { success: true as const, id };
+  }
+
+  async recordPayment(
+    id: string,
+    dto: RecordPayrollPaymentDto,
+    actor: AccessTokenPayload,
+  ) {
+    const payroll = await this.findPayrollByIdOrThrow(id);
+    await this.assertRecordInScope(actor, payroll);
+
+    if (payroll.status === PayrollStatus.cancelled) {
+      throw new ConflictException('Cannot pay a cancelled payroll');
+    }
+
+    const netSalary = Number(payroll.netSalary);
+    if (netSalary <= 0) {
+      throw new ConflictException('Payroll has no net salary set');
+    }
+
+    const paidSoFar = Number(payroll.paidAmount);
+    const newPaidAmount = paidSoFar + dto.amount;
+
+    if (newPaidAmount > netSalary) {
+      throw new BadRequestException(
+        'Payment amount exceeds the remaining balance',
+      );
+    }
+
+    const status =
+      newPaidAmount >= netSalary
+        ? PayrollStatus.paid
+        : PayrollStatus.partially_paid;
+
+    return this.prisma.payroll.update({
+      where: { id },
+      data: {
+        paidAmount: newPaidAmount,
+        status,
+        paidAt: new Date(),
+        paidById: actor.sub,
+        updatedById: actor.sub,
+      },
+    });
+  }
+
+  async getStatistics(query: PayrollStatsQueryDto, actor: AccessTokenPayload) {
+    const scope = resolveCompanyBranchScope(actor, {
+      companyId: query.companyId,
+      branchId: query.branchId,
+    });
+    const month = trimToNull(query.month);
+
+    const payrollWhere: Prisma.PayrollWhereInput = {
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
+      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
+      ...(month ? { month } : {}),
+    };
+
+    const advanceWhere: Prisma.AdvanceWhereInput = {
+      ...(scope.companyId ? { companyId: scope.companyId } : {}),
+      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
+      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
+      ...(month ? { month } : {}),
+    };
+
+    const [aggregate, statusGroups, advanceAggregate] = await Promise.all([
+      this.prisma.payroll.aggregate({
+        where: payrollWhere,
+        _sum: {
+          baseSalary: true,
+          totalBonus: true,
+          totalPenalty: true,
+          netSalary: true,
+          paidAmount: true,
+        },
+        _count: true,
+      }),
+      this.prisma.payroll.groupBy({
+        by: ['status'],
+        where: payrollWhere,
+        _count: true,
+      }),
+      this.prisma.advance.aggregate({
+        where: advanceWhere,
+        _sum: { amount: true },
+      }),
+    ]);
+
+    const totalNetSalary = Number(aggregate._sum.netSalary ?? 0);
+    const totalPaid = Number(aggregate._sum.paidAmount ?? 0);
+
+    const statusBreakdown: Record<PayrollStatus, number> = {
+      draft: 0,
+      confirmed: 0,
+      partially_paid: 0,
+      paid: 0,
+      cancelled: 0,
+    };
+    for (const group of statusGroups) {
+      statusBreakdown[group.status] = group._count;
+    }
+
+    return {
+      month: month ?? undefined,
+      employeeCount: aggregate._count,
+      totalBaseSalary: Number(aggregate._sum.baseSalary ?? 0),
+      totalBonus: Number(aggregate._sum.totalBonus ?? 0),
+      totalPenalty: Number(aggregate._sum.totalPenalty ?? 0),
+      totalNetSalary,
+      totalPaid,
+      totalRemaining: Math.max(0, totalNetSalary - totalPaid),
+      totalAdvance: Number(advanceAggregate._sum.amount ?? 0),
+      statusBreakdown,
+    };
   }
 
   private async findPayrollByIdOrThrow(id: string) {

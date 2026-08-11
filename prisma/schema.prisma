@@ -461,6 +461,7 @@ model Payroll {
   totalPenalty Decimal @default(0) @db.Decimal(15, 2)
   totalAdvance Decimal @default(0) @db.Decimal(15, 2)
   netSalary    Decimal @default(0) @db.Decimal(15, 2)
+  paidAmount   Decimal @default(0) @db.Decimal(15, 2)
 
   status PayrollStatus @default(draft)
 
@@ -645,6 +646,7 @@ enum LeaveRequestStatus {
 enum PayrollStatus {
   draft
   confirmed
+  partially_paid
   paid
   cancelled
 }

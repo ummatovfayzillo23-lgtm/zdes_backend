@@ -20,6 +20,11 @@ export class SalaryAdjustmentQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
+  branchId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
   employeeId?: string;
 
   @ApiPropertyOptional({

@@ -11,6 +11,11 @@ export class AdvanceQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
+  branchId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
   employeeId?: string;
 
   @ApiPropertyOptional({ example: '2026-06' })

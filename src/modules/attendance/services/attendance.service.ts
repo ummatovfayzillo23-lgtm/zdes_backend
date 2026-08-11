@@ -507,6 +507,8 @@ export class AttendanceService {
       branchId: query.branchId,
     });
 
+    const search = trimToNull(query.search);
+
     const where: Prisma.AttendanceWhereInput = {
       ...(scope.companyId ? { companyId: scope.companyId } : {}),
       ...(scope.branchId ? { branchId: scope.branchId } : {}),
@@ -514,11 +516,36 @@ export class AttendanceService {
       ...(query.terminalId ? { terminalId: query.terminalId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...this.buildDateRangeFilter(query.dateFrom, query.dateTo),
+      ...(search
+        ? {
+            employee: {
+              OR: [
+                { firstName: { contains: search, mode: 'insensitive' } },
+                { lastName: { contains: search, mode: 'insensitive' } },
+                { login: { contains: search, mode: 'insensitive' } },
+                { phone: { contains: search, mode: 'insensitive' } },
+                { employeeNo: { contains: search, mode: 'insensitive' } },
+              ],
+            },
+          }
+        : {}),
     };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.attendance.findMany({
         where,
+        include: {
+          employee: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              employeeNo: true,
+              phone: true,
+              avatarUrl: true,
+            },
+          },
+        },
         orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
         skip,
         take: limit,
@@ -528,7 +555,12 @@ export class AttendanceService {
 
     const responses = await Promise.all(
       items.map(async (item) =>
-        this.toResponse(item, await this.loadAdjustmentsForAttendance(item)),
+        this.toResponse(
+          item,
+          await this.loadAdjustmentsForAttendance(item),
+          undefined,
+          item.employee,
+        ),
       ),
     );
 
@@ -544,6 +576,18 @@ export class AttendanceService {
   async findOne(id: string, actor: AccessTokenPayload) {
     const attendance = await this.prisma.attendance.findUnique({
       where: { id },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            employeeNo: true,
+            phone: true,
+            avatarUrl: true,
+          },
+        },
+      },
     });
 
     if (!attendance) {
@@ -555,6 +599,8 @@ export class AttendanceService {
     return this.toResponse(
       attendance,
       await this.loadAdjustmentsForAttendance(attendance),
+      undefined,
+      attendance.employee,
     );
   }
 
@@ -816,12 +862,26 @@ export class AttendanceService {
     attendance: Attendance,
     appliedAdjustments: AttendanceAdjustmentDto[],
     faceSimilarity?: number,
+    employee?: Pick<
+      User,
+      'id' | 'firstName' | 'lastName' | 'employeeNo' | 'phone' | 'avatarUrl'
+    > | null,
   ) {
     return {
       id: attendance.id,
       companyId: attendance.companyId,
       branchId: attendance.branchId,
       employeeId: attendance.employeeId,
+      employee: employee
+        ? {
+            id: employee.id,
+            firstName: employee.firstName,
+            lastName: employee.lastName,
+            employeeNo: employee.employeeNo,
+            phone: employee.phone,
+            avatarUrl: employee.avatarUrl,
+          }
+        : undefined,
       terminalId: attendance.terminalId,
       date: attendance.date,
       checkIn: attendance.checkIn,

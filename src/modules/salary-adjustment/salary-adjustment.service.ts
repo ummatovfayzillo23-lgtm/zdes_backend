@@ -70,6 +70,7 @@ export class SalaryAdjustmentService {
     const search = trimToNull(query.search);
     const scope = resolveCompanyBranchScope(actor, {
       companyId: query.companyId,
+      branchId: query.branchId,
     });
 
     const where: Prisma.SalaryAdjustmentWhereInput = {
