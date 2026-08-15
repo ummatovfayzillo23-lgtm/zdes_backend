@@ -5,7 +5,7 @@ import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import type { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 
-export type ImageUploadCategory = 'avatars' | 'logos' | 'faces';
+export type ImageUploadCategory = 'avatars' | 'logos' | 'faces' | 'attendance';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
@@ -51,7 +51,10 @@ export function buildUploadUrl(
   category: ImageUploadCategory,
   filename: string,
 ): string {
-  return `/uploads/${category}/${filename}`;
+  const relativePath = `/uploads/${category}/${filename}`;
+  const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, '');
+
+  return baseUrl ? `${baseUrl}${relativePath}` : relativePath;
 }
 
 export function assertFileProvided(

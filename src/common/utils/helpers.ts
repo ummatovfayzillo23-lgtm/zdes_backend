@@ -123,22 +123,3 @@ export function getWorkDayNumber(value: Date): number {
   return day === 0 ? 7 : day;
 }
 
-export function decodeBase64Image(value: string): {
-  buffer: Buffer;
-  contentType: string | null;
-} {
-  const trimmedValue = value.trim();
-  const dataUriMatch = /^data:(.+);base64,(.+)$/.exec(trimmedValue);
-
-  if (dataUriMatch) {
-    return {
-      contentType: dataUriMatch[1] ?? null,
-      buffer: Buffer.from(dataUriMatch[2] ?? '', 'base64'),
-    };
-  }
-
-  return {
-    contentType: null,
-    buffer: Buffer.from(trimmedValue, 'base64'),
-  };
-}

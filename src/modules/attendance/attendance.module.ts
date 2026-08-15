@@ -4,7 +4,6 @@ import { AttendanceController } from './attendance.controller';
 import { AttendanceDemoSeedService } from './services/attendance-demo-seed.service';
 import { AttendanceService } from './services/attendance.service';
 import { AwsFaceVerificationService } from './services/aws-face-verification.service';
-import { AwsS3Service } from './services/aws-s3.service';
 
 @Module({
   imports: [NotificationModule],
@@ -12,7 +11,6 @@ import { AwsS3Service } from './services/aws-s3.service';
   providers: [
     AttendanceService,
     AwsFaceVerificationService,
-    AwsS3Service,
     AttendanceDemoSeedService,
   ],
 })
