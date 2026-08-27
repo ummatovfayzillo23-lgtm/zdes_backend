@@ -16,17 +16,12 @@ function toBoolean(value: unknown): boolean | undefined {
   if (value === undefined || value === null || value === '') {
     return undefined;
   }
-
-  if (typeof value === 'boolean') {
-    return value;
+  if (value === true || value === 'true' || value === 1 || value === '1') {
+    return true;
   }
-
-  if (typeof value === 'string') {
-    const v = value.toLowerCase();
-    if (v === 'true') return true;
-    if (v === 'false') return false;
+  if (value === false || value === 'false' || value === 0 || value === '0') {
+    return false;
   }
-
   return undefined;
 }
 
@@ -56,15 +51,25 @@ export class UserQueryDto {
   @IsEnum(UserRole)
   role?: UserRole;
 
-  @ApiPropertyOptional({ example: true })
+  @ApiPropertyOptional({ example: true, type: Boolean })
   @IsOptional()
-  @Transform(({ value }) => toBoolean(value))
+  @Transform(({ obj, key }) => {
+    const val = obj[key];
+    if (val === 'true' || val === true || val === '1' || val === 1) return true;
+    if (val === 'false' || val === false || val === '0' || val === 0) return false;
+    return undefined;
+  })
   @IsBoolean()
   isActive?: boolean;
 
-  @ApiPropertyOptional({ example: false })
+  @ApiPropertyOptional({ example: false, type: Boolean })
   @IsOptional()
-  @Transform(({ value }) => toBoolean(value))
+  @Transform(({ obj, key }) => {
+    const val = obj[key];
+    if (val === 'true' || val === true || val === '1' || val === 1) return true;
+    if (val === 'false' || val === false || val === '0' || val === 0) return false;
+    return undefined;
+  })
   @IsBoolean()
   isBlocked?: boolean;
 
