@@ -72,7 +72,7 @@ async function bootstrap() {
 
   SwaggerModule.setup(swaggerFullPath, app, swaggerDocument);
 
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
   console.log(`App running: http://${host}:${port}/${API_PREFIX}`);
   console.log(`Swagger docs: http://${host}:${port}/${swaggerFullPath}`);
