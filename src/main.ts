@@ -42,10 +42,10 @@ async function bootstrap() {
     new HttpCacheInterceptor(app.get(CacheService)),
   );
   app.enableCors({
-    origin: true,
-    credentials: true,
+    origin: '*',
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['*'],
+    exposedHeaders: ['*'],
   });
 
   app.useGlobalPipes(
