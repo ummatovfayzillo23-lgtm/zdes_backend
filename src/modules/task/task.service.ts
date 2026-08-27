@@ -79,11 +79,28 @@ type TaskData = {
   departmentId?: string | null;
 };
 
+const USER_SELECT = {
+  id: true,
+  login: true,
+  role: true,
+  companyId: true,
+  branchId: true,
+  departmentId: true,
+  positionId: true,
+  firstName: true,
+  lastName: true,
+  middleName: true,
+  phone: true,
+  email: true,
+  avatarUrl: true,
+  isActive: true,
+};
+
 const TASK_INCLUDE = {
   project: true,
   department: true,
-  createdBy: true,
-  assignees: { include: { user: true } },
+  createdBy: { select: USER_SELECT },
+  assignees: { include: { user: { select: USER_SELECT } } },
 };
 
 @Injectable()
