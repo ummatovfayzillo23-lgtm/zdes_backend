@@ -25,6 +25,7 @@ import { RawAttendanceLogModule } from './modules/raw-attendance-log/raw-attenda
 import { RefreshTokenModule } from './modules/refresh-token/refresh-token.module';
 import { SalaryAdjustmentModule } from './modules/salary-adjustment/salary-adjustment.module';
 import { SettingModule } from './modules/setting/setting.module';
+import { TaskModule } from './modules/task/task.module';
 import { TerminalModule } from './modules/terminal/terminal.module';
 import { TurnstileModule } from './modules/turnstile/turnstile.module';
 import { UserModule } from './modules/user/user.module';
@@ -63,6 +64,7 @@ import { WorkScheduleModule } from './modules/work-schedule/work-schedule.module
     UserModule,
     WorkScheduleModule,
     TurnstileModule,
+    TaskModule,
   ],
   controllers: [],
   providers: [

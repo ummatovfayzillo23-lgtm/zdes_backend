@@ -34,6 +34,8 @@ model Company {
   advances          Advance[]
   payrolls          Payroll[]
   settings          Setting[]
+  taskProjects      TaskProject[]
+  tasks             Task[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -56,9 +58,9 @@ model Branch {
   departments       Department[]
   workScheduleLinks WorkScheduleCompany[]
   terminals         Terminal[]
-  holidays       Holiday[]
-  employeeLeaves EmployeeLeave[]
-  attendances    Attendance[]
+  holidays          Holiday[]
+  employeeLeaves    EmployeeLeave[]
+  attendances       Attendance[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -79,6 +81,7 @@ model Department {
   branch    Branch?    @relation(fields: [branchId], references: [id], onDelete: SetNull)
   users     User[]
   positions Position[]
+  tasks     Task[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -141,6 +144,7 @@ model User {
 
   isActive  Boolean @default(true)
   isBlocked Boolean @default(false)
+  isDeleted Boolean @default(false)
 
   company      Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
   branch       Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
@@ -160,6 +164,8 @@ model User {
   notifications     Notification[]
   refreshTokens     RefreshToken[]
   pushTokens        PushToken[]
+  createdTasks      Task[]             @relation("TaskCreatedBy")
+  taskAssignments   TaskAssignee[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -173,6 +179,7 @@ model User {
   @@index([managerId])
   @@index([role])
   @@index([isActive])
+  @@index([isDeleted])
 }
 
 /// A schedule is owned/managed by one company (companyId) but can be
@@ -411,7 +418,7 @@ model Holiday {
   @@index([endDate])
 }
 
-model EmployeeLeave  {
+model EmployeeLeave {
   id         String  @id @default(uuid()) @db.Uuid
   companyId  String  @db.Uuid
   branchId   String? @db.Uuid
@@ -565,6 +572,72 @@ model AppVersion {
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 }
 
+model TaskProject {
+  id          String   @id @default(uuid()) @db.Uuid
+  companyId   String   @db.Uuid
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  color       String?  @db.VarChar(50)
+  icon        String?  @db.VarChar(50)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tasks   Task[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@index([isActive])
+}
+
+model Task {
+  id           String       @id @default(uuid()) @db.Uuid
+  companyId    String       @db.Uuid
+  projectId    String?      @db.Uuid
+  departmentId String?      @db.Uuid
+  title        String       @db.VarChar(255)
+  description  String?      @db.Text
+  type         TaskType     @default(feature)
+  status       TaskStatus   @default(not_started)
+  priority     TaskPriority @default(normal)
+  startDate    DateTime?    @db.Timestamptz(6)
+  dueDate      DateTime?    @db.Timestamptz(6)
+  order        Int          @default(0)
+  createdById  String       @db.Uuid
+  createdAt    DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @db.Timestamptz(6)
+
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project    TaskProject?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  department Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  createdBy  User           @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  assignees  TaskAssignee[]
+
+  @@index([companyId])
+  @@index([projectId])
+  @@index([departmentId])
+  @@index([status])
+  @@index([priority])
+  @@index([type])
+  @@index([createdById])
+  @@index([dueDate])
+}
+
+model TaskAssignee {
+  id         String   @id @default(uuid()) @db.Uuid
+  taskId     String   @db.Uuid
+  userId     String   @db.Uuid
+  assignedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@index([taskId])
+  @@index([userId])
+}
+
 enum UserRole {
   superadmin
   admin
@@ -656,4 +729,27 @@ enum NotificationIcon {
   alert
   money
   attendance
+}
+
+enum TaskStatus {
+  not_started
+  in_progress
+  in_review
+  done
+  cancelled
+}
+
+enum TaskPriority {
+  lowest
+  normal
+  high
+  urgent
+}
+
+enum TaskType {
+  feature
+  bug
+  review
+  testing
+  other
 }
