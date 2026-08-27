@@ -11,19 +11,7 @@ import {
   Min,
 } from 'class-validator';
 import { UserRole } from '@prisma/client';
-
-function toBoolean(value: unknown): boolean | undefined {
-  if (value === undefined || value === null || value === '') {
-    return undefined;
-  }
-  if (value === true || value === 'true' || value === 1 || value === '1') {
-    return true;
-  }
-  if (value === false || value === 'false' || value === 0 || value === '0') {
-    return false;
-  }
-  return undefined;
-}
+import { toBooleanQuery } from '../../../common/utils/helpers';
 
 export class UserQueryDto {
   @ApiPropertyOptional()
@@ -53,23 +41,13 @@ export class UserQueryDto {
 
   @ApiPropertyOptional({ example: true, type: Boolean })
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const val = obj[key];
-    if (val === 'true' || val === true || val === '1' || val === 1) return true;
-    if (val === 'false' || val === false || val === '0' || val === 0) return false;
-    return undefined;
-  })
+  @Transform(({ obj, key }) => toBooleanQuery(obj[key]))
   @IsBoolean()
   isActive?: boolean;
 
   @ApiPropertyOptional({ example: false, type: Boolean })
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const val = obj[key];
-    if (val === 'true' || val === true || val === '1' || val === 1) return true;
-    if (val === 'false' || val === false || val === '0' || val === 0) return false;
-    return undefined;
-  })
+  @Transform(({ obj, key }) => toBooleanQuery(obj[key]))
   @IsBoolean()
   isBlocked?: boolean;
 

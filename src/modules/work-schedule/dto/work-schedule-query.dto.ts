@@ -9,16 +9,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-
-function toBoolean(value: unknown): boolean | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
-    if (value.toLowerCase() === 'true') return true;
-    if (value.toLowerCase() === 'false') return false;
-  }
-  return undefined;
-}
+import { toBooleanQuery } from '../../../common/utils/helpers';
 
 export class WorkScheduleQueryDto {
   @ApiPropertyOptional()
@@ -36,15 +27,15 @@ export class WorkScheduleQueryDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ example: true })
+  @ApiPropertyOptional({ example: true, type: Boolean })
   @IsOptional()
-  @Transform(({ value }) => toBoolean(value))
+  @Transform(({ obj, key }) => toBooleanQuery(obj[key]))
   @IsBoolean()
   isDefault?: boolean;
 
-  @ApiPropertyOptional({ example: true })
+  @ApiPropertyOptional({ example: true, type: Boolean })
   @IsOptional()
-  @Transform(({ value }) => toBoolean(value))
+  @Transform(({ obj, key }) => toBooleanQuery(obj[key]))
   @IsBoolean()
   isActive?: boolean;
 

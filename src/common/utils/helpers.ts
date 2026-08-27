@@ -4,6 +4,16 @@ export function trimToNull(value?: string | null): string | null {
   return trimmedValue ? trimmedValue : null;
 }
 
+export function toBooleanQuery(value: unknown): boolean | undefined {
+  if (value === true || value === 'true' || value === 1 || value === '1') {
+    return true;
+  }
+  if (value === false || value === 'false' || value === 0 || value === '0') {
+    return false;
+  }
+  return undefined;
+}
+
 export function isDateExpired(value: Date): boolean {
   return value.getTime() <= Date.now();
 }

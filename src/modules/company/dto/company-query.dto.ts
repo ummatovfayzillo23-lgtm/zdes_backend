@@ -8,30 +8,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-
-function toBoolean(value: unknown): boolean | undefined {
-  if (value === undefined || value === null || value === '') {
-    return undefined;
-  }
-
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    const normalizedValue = value.toLowerCase();
-
-    if (normalizedValue === 'true') {
-      return true;
-    }
-
-    if (normalizedValue === 'false') {
-      return false;
-    }
-  }
-
-  return undefined;
-}
+import { toBooleanQuery } from '../../../common/utils/helpers';
 
 export class CompanyQueryDto {
   @ApiPropertyOptional({
@@ -43,9 +20,10 @@ export class CompanyQueryDto {
 
   @ApiPropertyOptional({
     example: true,
+    type: Boolean,
   })
   @IsOptional()
-  @Transform(({ value }) => toBoolean(value))
+  @Transform(({ obj, key }) => toBooleanQuery(obj[key]))
   @IsBoolean()
   isActive?: boolean;
 
