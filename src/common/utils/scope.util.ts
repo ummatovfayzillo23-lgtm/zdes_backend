@@ -42,11 +42,13 @@ export function resolveScopedCompanyId(
   providedCompanyId?: string,
 ): string {
   if (actor.role === 'superadmin') {
-    if (!providedCompanyId) {
-      throw new BadRequestException('companyId is required');
+    if (providedCompanyId) {
+      return providedCompanyId;
     }
-
-    return providedCompanyId;
+    if (actor.companyId) {
+      return actor.companyId;
+    }
+    throw new BadRequestException('companyId is required');
   }
 
   if (!actor.companyId) {

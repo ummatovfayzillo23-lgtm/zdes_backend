@@ -294,14 +294,12 @@ export class TaskService {
     actor: AccessTokenPayload,
     dto: CreateSelfTaskDto,
   ): Promise<TaskWithRelations> {
-    if (!actor.companyId) {
-      throw new ForbiddenException('Actor is not assigned to a company');
-    }
+    const companyId = resolveScopedCompanyId(actor, dto.companyId);
     this.validateTitle(dto.title);
 
     const task = await this.prisma.task.create({
       data: {
-        companyId: actor.companyId,
+        companyId,
         title: dto.title.trim(),
         description: dto.description ?? null,
         type: TaskType.feature,
@@ -327,16 +325,14 @@ export class TaskService {
     actor: AccessTokenPayload,
     query: MyTasksQueryDto,
   ): Promise<{ items: TaskWithRelations[]; total: number; page: number; limit: number; totalPages: number }> {
-    if (!actor.companyId) {
-      throw new ForbiddenException('Actor is not assigned to a company');
-    }
+    const companyId = resolveScopedCompanyId(actor, query.companyId);
 
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
     const where: Prisma.TaskWhereInput = {
-      companyId: actor.companyId,
+      companyId,
       OR: [
         { createdById: actor.sub },
         { assignees: { some: { userId: actor.sub } } },

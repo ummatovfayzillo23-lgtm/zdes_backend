@@ -1,8 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 
 export class MyTasksQueryDto {
+  @ApiPropertyOptional({
+    description:
+      'Company UUID (optional for superadmin override; auto-resolved from token for company actors)',
+    example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  })
+  @IsOptional()
+  @IsUUID()
+  companyId?: string;
+
   @ApiPropertyOptional({ example: 1, default: 1 })
   @IsOptional()
   @Type(() => Number)
