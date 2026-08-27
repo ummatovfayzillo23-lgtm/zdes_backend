@@ -43,10 +43,10 @@ All read/write here goes through the same two helpers as the rest of the codebas
 | `manager` | forced to their own `companyId` | **forced to their own `branchId`**; sending a different one throws `403` | only their **own branch** |
 | `employee` | n/a — `self/*` routes always operate on `actor.sub` | n/a | only their **own** records, never anyone else's |
 
-- **List** (`GET /attendance`) and **get one** (`GET /attendance/:id`) both apply this scope — `findAll` via `resolveCompanyBranchScope`, `findOne` via `assertWithinScope` (checked against the found record's `companyId`/`branchId`).
-- **Operator check-in / check-out**: scope is enforced against the *target employee*, not query params — `assertWithinScope(actor, employee)` throws `403` if the actor tries to check in/out an employee outside their own company (admin) or own branch (manager).
+- **List** (`GET /attendance`) and **get one** (`GET /attendance/:id`) both apply this scope — `findAll` via `getScope`, `findOne` via `checkAccess` (checked against the found record's `companyId`/`branchId`).
+- **Operator check-in / check-out**: scope is enforced against the *target employee*, not query params — `checkAccess(actor, employee)` throws `403` if the actor tries to check in/out an employee outside their own company (admin) or own branch (manager).
 - **Self check-in / check-out / sessions**: no scope check needed — the target is always the caller (`actor.sub`), so identity is the only gate (`@Roles('employee')`).
-- **KPI template**: `getKpiTemplate` uses `assertWithinScope`; `upsertKpiTemplate` uses `resolveScopedCompanyId` (superadmin **must** pass `companyId`; admin's is auto-filled from the JWT and any other value is rejected with `403`).
+- **KPI template**: `getKpiTemplate` uses `checkAccess`; `upsertKpiTemplate` uses `getCompanyId` (superadmin **must** pass `companyId`; admin's is auto-filled from the JWT and any other value is rejected with `403`).
 - If a non-superadmin actor has no `companyId` (or a manager with no `branchId`) on their JWT, every one of these calls throws `403 Forbidden` — an actor must be assigned before using this API.
 
 ---
@@ -130,7 +130,7 @@ All four photo-taking endpoints (`check-in`, `check-out`, `self/check-in`, `self
 
 - 5MB max, `image/jpeg` / `image/png` / `image/webp` only (multer `fileFilter`).
 - Saved to `uploads/attendance/<uuid>.<ext>` on local disk, served at `/uploads/attendance/<filename>`.
-- If `file` is missing from the request, it fails fast with a clean `400 "file is required"` (`assertFileProvided`) before any DB/AWS work happens.
+- If `file` is missing from the request, it fails fast with a clean `400 "file is required"` (`getFile`) before any DB/AWS work happens.
 - **No S3 anywhere in this module.** AWS Rekognition only reads the uploaded file's bytes off disk for the one-shot `CompareFaces` call — it never stores or re-uploads the image itself.
 
 ---
@@ -220,8 +220,8 @@ notes: "Late due to traffic"                optional, max 1000 chars
 ```
 
 **What happens, in order:**
-1. `assertFileProvided(file)` — `400` if no file was sent.
-2. `assertWithinScope(actor, employee)` — actor must be allowed to touch this employee (own company for admin, own branch for manager).
+1. `getFile(file)` — `400` if no file was sent.
+2. `checkAccess(actor, employee)` — actor must be allowed to touch this employee (own company for admin, own branch for manager).
 3. Employee must exist, be `isActive`, not `isBlocked`, and have a `companyId` — otherwise `404`/`403`/`409`.
 4. `terminalId` (if sent) must belong to the employee's company (`404`/`409` otherwise).
 5. Face verification (see [above](#face-verification-flow-shared-by-all-4-photo-endpoints)) — `409` if no reference photo, `403` if similarity is too low.
@@ -287,7 +287,7 @@ notes: "arrived early"  optional, max 1000 chars
 `employeeId` is **never** sent — the target is always `actor.sub` (the caller checks themselves in, never anyone else).
 
 **What happens, in order:**
-1. `assertFileProvided(file)` — `400` if no file.
+1. `getFile(file)` — `400` if no file.
 2. Employee is re-fetched from the DB fresh (not trusted from the JWT) — must be `isActive`, not `isBlocked`.
 3. If the employee already has an **open** session today (an `AttendanceSession` with `checkOut: null`), throws `409 "You already have an open check-in for today. Check out first."` — unlike the operator flow, this check is at the **session** level, not the daily-row level, so a second visit the same day is allowed as long as the previous one was checked out.
 4. Face verification, same as the operator flow.
@@ -333,7 +333,7 @@ Role: `employee` only
 Content-Type: `multipart/form-data` — identical fields to self check-in (`file`, `notes?`).
 
 **What happens, in order:**
-1. `assertFileProvided(file)` — `400` if no file.
+1. `getFile(file)` — `400` if no file.
 2. Employee re-fetched fresh from the DB (same active/blocked check).
 3. Finds the employee's currently **open** session for today (`checkOut: null`, most recent by `checkIn`); if none, `409 "You must check in before check out"`.
 4. Face verification, same as check-in.

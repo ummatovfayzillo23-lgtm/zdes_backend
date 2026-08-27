@@ -20,17 +20,14 @@ import { UpdatePositionDto } from './dto/update-position.dto';
 import { PositionService } from './position.service';
 
 @ApiTags('Positions')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('positions')
 export class PositionController {
   constructor(private readonly positionService: PositionService) {}
 
   @Post()
-  @ApiOperation({
-    summary:
-      'Create position - superadmin, admin (own company), manager (own branch, departmentId required)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreatePositionDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -39,10 +36,9 @@ export class PositionController {
   }
 
   @Get()
-  @ApiOperation({
-    summary:
-      'Get positions - superadmin (all), admin (own company), manager (own branch)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: PositionQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -51,9 +47,9 @@ export class PositionController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Get position by id - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -62,7 +58,9 @@ export class PositionController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update position - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePositionDto,
@@ -72,9 +70,9 @@ export class PositionController {
   }
 
   @Patch(':id/toggle-status')
-  @ApiOperation({
-    summary: 'Toggle position status - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   toggleStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: TogglePositionStatusDto,
@@ -84,7 +82,9 @@ export class PositionController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete position - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

@@ -4,13 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PayrollStatus, type Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import { PayrollStatus } from '@prisma/client';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
 import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-  resolveScopedCompanyId,
+  checkAccess,
+  getScope,
+  getCompanyId,
 } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreatePayrollDto } from './dto/create-payroll.dto';
@@ -19,26 +19,56 @@ import { PayrollStatsQueryDto } from './dto/payroll-stats-query.dto';
 import { RecordPayrollPaymentDto } from './dto/record-payroll-payment.dto';
 import { UpdatePayrollDto } from './dto/update-payroll.dto';
 
+type PayrollFilter = {
+  companyId?: string;
+  employee?: { branchId: string };
+  employeeId?: string;
+  month?: string;
+  status?: PayrollStatus;
+};
+
+type AdvanceFilter = {
+  companyId?: string;
+  employee?: { branchId: string };
+  employeeId?: string;
+  month?: string;
+};
+
+type PayrollData = {
+  updatedById: string;
+  companyId?: string;
+  employeeId?: string;
+  month?: string;
+  baseSalary?: number;
+  totalBonus?: number;
+  totalPenalty?: number;
+  totalAdvance?: number;
+  netSalary?: number;
+  status?: PayrollStatus;
+  paidAt?: Date | null;
+  paidById?: string | null;
+};
+
 @Injectable()
 export class PayrollService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreatePayrollDto, actor: AccessTokenPayload) {
-    const companyId = await this.ensureCompanyExists(
-      resolveScopedCompanyId(actor, dto.companyId),
-    );
-    const employeeId = await this.ensureEmployeeInScope(
+    const companyId = getCompanyId(actor, dto.companyId);
+    await this.checkCompany(companyId);
+    const employeeId = await this.checkEmployee(
       dto.employeeId,
       companyId,
       actor,
     );
-    const month = this.normalizeRequired(
-      dto.month,
-      'Payroll month is required',
-    );
-    const paidById = await this.resolvePaidById(dto.paidById);
 
-    await this.ensureUniquePayroll(employeeId, month);
+    const month = trimToNull(dto.month);
+    if (!month) {
+      throw new ConflictException('Month is required');
+    }
+    const paidById = await this.checkPaidBy(dto.paidById);
+
+    await this.checkPayrollUnique(employeeId, month);
 
     return this.prisma.payroll.create({
       data: {
@@ -63,20 +93,30 @@ export class PayrollService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const scope = resolveCompanyBranchScope(actor, {
+
+    const scope = getScope(actor, {
       companyId: query.companyId,
       branchId: query.branchId,
     });
 
-    const where: Prisma.PayrollWhereInput = {
-      ...(scope.companyId ? { companyId: scope.companyId } : {}),
-      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
-      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
-      ...(trimToNull(query.month)
-        ? { month: trimToNull(query.month) as string }
-        : {}),
-      ...(query.status ? { status: query.status } : {}),
-    };
+    const where: PayrollFilter = {};
+    if (scope.companyId) {
+      where.companyId = scope.companyId;
+    }
+    if (scope.branchId) {
+      where.employee = { branchId: scope.branchId };
+    }
+    if (query.employeeId) {
+      where.employeeId = query.employeeId;
+    }
+
+    const month = trimToNull(query.month);
+    if (month) {
+      where.month = month;
+    }
+    if (query.status) {
+      where.status = query.status;
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.payroll.findMany({
@@ -98,68 +138,82 @@ export class PayrollService {
   }
 
   async findOne(id: string, actor: AccessTokenPayload) {
-    const payroll = await this.findPayrollByIdOrThrow(id);
-    await this.assertRecordInScope(actor, payroll);
+    const payroll = await this.getPayrollById(id);
+    await this.checkRecordAccess(actor, payroll);
     return payroll;
   }
 
   async update(id: string, dto: UpdatePayrollDto, actor: AccessTokenPayload) {
-    const existing = await this.findPayrollByIdOrThrow(id);
-    await this.assertRecordInScope(actor, existing);
+    const existing = await this.getPayrollById(id);
+    await this.checkRecordAccess(actor, existing);
 
-    const companyId =
-      dto.companyId !== undefined
-        ? await this.ensureCompanyExists(
-            resolveScopedCompanyId(actor, dto.companyId),
-          )
-        : existing.companyId;
-    const employeeId =
-      dto.employeeId !== undefined
-        ? await this.ensureEmployeeInScope(dto.employeeId, companyId, actor)
-        : await this.ensureEmployeeInScope(
-            existing.employeeId,
-            companyId,
-            actor,
-          );
-    const month =
-      dto.month !== undefined
-        ? this.normalizeRequired(dto.month, 'Payroll month is required')
-        : existing.month;
-    const paidById =
-      dto.paidById !== undefined
-        ? await this.resolvePaidById(dto.paidById)
-        : existing.paidById;
+    const data: PayrollData = { updatedById: actor.sub };
 
-    await this.ensureUniquePayroll(employeeId, month, id);
+    let companyId = existing.companyId;
+    if (dto.companyId !== undefined) {
+      companyId = getCompanyId(actor, dto.companyId);
+      await this.checkCompany(companyId);
+      data.companyId = companyId;
+    }
 
-    return this.prisma.payroll.update({
-      where: { id },
-      data: {
+    let employeeId = existing.employeeId;
+    if (dto.employeeId !== undefined) {
+      employeeId = await this.checkEmployee(dto.employeeId, companyId, actor);
+      data.employeeId = employeeId;
+    } else if (dto.companyId !== undefined) {
+      employeeId = await this.checkEmployee(
+        existing.employeeId,
         companyId,
-        employeeId,
-        month,
-        ...(dto.baseSalary !== undefined ? { baseSalary: dto.baseSalary } : {}),
-        ...(dto.totalBonus !== undefined ? { totalBonus: dto.totalBonus } : {}),
-        ...(dto.totalPenalty !== undefined
-          ? { totalPenalty: dto.totalPenalty }
-          : {}),
-        ...(dto.totalAdvance !== undefined
-          ? { totalAdvance: dto.totalAdvance }
-          : {}),
-        ...(dto.netSalary !== undefined ? { netSalary: dto.netSalary } : {}),
-        ...(dto.status !== undefined ? { status: dto.status } : {}),
-        ...(dto.paidAt !== undefined
-          ? { paidAt: dto.paidAt ? new Date(dto.paidAt) : null }
-          : {}),
-        paidById,
-        updatedById: actor.sub,
-      },
-    });
+        actor,
+      );
+      data.employeeId = employeeId;
+    }
+
+    let month = existing.month;
+    if (dto.month !== undefined) {
+      const trimmed = trimToNull(dto.month);
+      if (!trimmed) {
+        throw new ConflictException('Month is required');
+      }
+      month = trimmed;
+      data.month = trimmed;
+    }
+
+    if (dto.employeeId !== undefined || dto.month !== undefined) {
+      await this.checkPayrollUnique(employeeId, month, id);
+    }
+
+    if (dto.paidById !== undefined) {
+      data.paidById = await this.checkPaidBy(dto.paidById);
+    }
+    if (dto.baseSalary !== undefined) {
+      data.baseSalary = dto.baseSalary;
+    }
+    if (dto.totalBonus !== undefined) {
+      data.totalBonus = dto.totalBonus;
+    }
+    if (dto.totalPenalty !== undefined) {
+      data.totalPenalty = dto.totalPenalty;
+    }
+    if (dto.totalAdvance !== undefined) {
+      data.totalAdvance = dto.totalAdvance;
+    }
+    if (dto.netSalary !== undefined) {
+      data.netSalary = dto.netSalary;
+    }
+    if (dto.status !== undefined) {
+      data.status = dto.status;
+    }
+    if (dto.paidAt !== undefined) {
+      data.paidAt = dto.paidAt ? new Date(dto.paidAt) : null;
+    }
+
+    return this.prisma.payroll.update({ where: { id }, data });
   }
 
   async delete(id: string, actor: AccessTokenPayload) {
-    const payroll = await this.findPayrollByIdOrThrow(id);
-    await this.assertRecordInScope(actor, payroll);
+    const payroll = await this.getPayrollById(id);
+    await this.checkRecordAccess(actor, payroll);
     await this.prisma.payroll.delete({ where: { id } });
     return { success: true as const, id };
   }
@@ -169,8 +223,8 @@ export class PayrollService {
     dto: RecordPayrollPaymentDto,
     actor: AccessTokenPayload,
   ) {
-    const payroll = await this.findPayrollByIdOrThrow(id);
-    await this.assertRecordInScope(actor, payroll);
+    const payroll = await this.getPayrollById(id);
+    await this.checkRecordAccess(actor, payroll);
 
     if (payroll.status === PayrollStatus.cancelled) {
       throw new ConflictException('Cannot pay a cancelled payroll');
@@ -208,25 +262,30 @@ export class PayrollService {
   }
 
   async getStatistics(query: PayrollStatsQueryDto, actor: AccessTokenPayload) {
-    const scope = resolveCompanyBranchScope(actor, {
+    const scope = getScope(actor, {
       companyId: query.companyId,
       branchId: query.branchId,
     });
     const month = trimToNull(query.month);
 
-    const payrollWhere: Prisma.PayrollWhereInput = {
-      ...(scope.companyId ? { companyId: scope.companyId } : {}),
-      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
-      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
-      ...(month ? { month } : {}),
-    };
-
-    const advanceWhere: Prisma.AdvanceWhereInput = {
-      ...(scope.companyId ? { companyId: scope.companyId } : {}),
-      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
-      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
-      ...(month ? { month } : {}),
-    };
+    const payrollWhere: PayrollFilter = {};
+    const advanceWhere: AdvanceFilter = {};
+    if (scope.companyId) {
+      payrollWhere.companyId = scope.companyId;
+      advanceWhere.companyId = scope.companyId;
+    }
+    if (scope.branchId) {
+      payrollWhere.employee = { branchId: scope.branchId };
+      advanceWhere.employee = { branchId: scope.branchId };
+    }
+    if (query.employeeId) {
+      payrollWhere.employeeId = query.employeeId;
+      advanceWhere.employeeId = query.employeeId;
+    }
+    if (month) {
+      payrollWhere.month = month;
+      advanceWhere.month = month;
+    }
 
     const [aggregate, statusGroups, advanceAggregate] = await Promise.all([
       this.prisma.payroll.aggregate({
@@ -279,7 +338,7 @@ export class PayrollService {
     };
   }
 
-  private async findPayrollByIdOrThrow(id: string) {
+  private async getPayrollById(id: string) {
     const payroll = await this.prisma.payroll.findUnique({ where: { id } });
     if (!payroll) {
       throw new NotFoundException('Payroll not found');
@@ -287,12 +346,12 @@ export class PayrollService {
     return payroll;
   }
 
-  private async assertRecordInScope(
+  private async checkRecordAccess(
     actor: AccessTokenPayload,
     record: { companyId: string; employeeId: string },
   ): Promise<void> {
     if (actor.role === 'superadmin' || actor.role === 'admin') {
-      assertWithinScope(actor, record);
+      checkAccess(actor, record);
       return;
     }
 
@@ -300,13 +359,13 @@ export class PayrollService {
       where: { id: record.employeeId },
       select: { branchId: true },
     });
-    assertWithinScope(actor, {
+    checkAccess(actor, {
       companyId: record.companyId,
       branchId: employee?.branchId,
     });
   }
 
-  private async ensureCompanyExists(companyId: string) {
+  private async checkCompany(companyId: string): Promise<void> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { id: true },
@@ -314,14 +373,13 @@ export class PayrollService {
     if (!company) {
       throw new NotFoundException('Company not found');
     }
-    return company.id;
   }
 
-  private async ensureEmployeeInScope(
+  private async checkEmployee(
     employeeId: string,
     companyId: string,
     actor: AccessTokenPayload,
-  ) {
+  ): Promise<string> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       select: { id: true, companyId: true, branchId: true },
@@ -330,15 +388,13 @@ export class PayrollService {
       throw new NotFoundException('Employee not found');
     }
     if (employee.companyId !== companyId) {
-      throw new ConflictException(
-        'Employee does not belong to the selected company',
-      );
+      throw new ConflictException('Employee is not in this company');
     }
-    assertWithinScope(actor, employee);
+    checkAccess(actor, employee);
     return employee.id;
   }
 
-  private async resolvePaidById(paidById?: string | null) {
+  private async checkPaidBy(paidById?: string | null): Promise<string | null> {
     if (paidById == null) {
       return null;
     }
@@ -347,40 +403,27 @@ export class PayrollService {
       where: { id: paidById },
       select: { id: true },
     });
-
     if (!user) {
       throw new NotFoundException('Paid by user not found');
     }
-
     return user.id;
   }
 
-  private async ensureUniquePayroll(
+  private async checkPayrollUnique(
     employeeId: string,
     month: string,
     excludedId?: string,
-  ) {
+  ): Promise<void> {
     const payroll = await this.prisma.payroll.findFirst({
-      where: {
-        employeeId,
-        month,
-        ...(excludedId ? { id: { not: excludedId } } : {}),
-      },
+      where: excludedId
+        ? { employeeId, month, id: { not: excludedId } }
+        : { employeeId, month },
       select: { id: true },
     });
-
     if (payroll) {
       throw new ConflictException(
         'Payroll already exists for this employee and month',
       );
     }
-  }
-
-  private normalizeRequired(value: string, message: string) {
-    const normalized = trimToNull(value);
-    if (!normalized) {
-      throw new ConflictException(message);
-    }
-    return normalized;
   }
 }

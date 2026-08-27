@@ -33,24 +33,22 @@ import { UserQueryDto } from './dto/user-query.dto';
 import { UserService } from './user.service';
 
 @ApiTags('Users')
-@ApiBearerAuth()
 @Controller('users')
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Post()
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin')
-  @ApiOperation({ summary: 'Create user - superadmin, admin (own company)' })
+  @ApiOperation({ summary: 'superadmin, admin' })
   create(@Body() dto: CreateUserDto, @CurrentUser() actor: AccessTokenPayload) {
     return this.userService.create(dto, actor);
   }
 
   @Get()
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary:
-      'Get users - superadmin (all), admin (own company), manager (own branch employees)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: UserQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -59,8 +57,9 @@ export class UserController {
   }
 
   @Get(':id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({ summary: 'Get user by id - superadmin, admin, manager' })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -69,8 +68,9 @@ export class UserController {
   }
 
   @Patch('me')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({ summary: 'Update own profile - superadmin, admin, manager' })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   updateOwnProfile(
     @Body() dto: UpdateOwnProfileDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -79,8 +79,9 @@ export class UserController {
   }
 
   @Post('me/avatar')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({ summary: 'Upload own avatar - superadmin, admin, manager' })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -97,11 +98,9 @@ export class UserController {
   }
 
   @Patch(':id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary:
-      'Update user - superadmin, admin (own company), manager (own branch employees)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserDto,
@@ -111,11 +110,9 @@ export class UserController {
   }
 
   @Post(':id/avatar')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary:
-      'Upload avatar for a user - superadmin, admin (own company), manager (own branch employees)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -133,11 +130,9 @@ export class UserController {
   }
 
   @Post(':id/face-image')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin')
-  @ApiOperation({
-    summary:
-      'Upload face recognition reference image for a user - superadmin, admin (own company)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -155,11 +150,9 @@ export class UserController {
   }
 
   @Patch(':id/toggle-status')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary:
-      'Toggle user status - superadmin, admin, manager (own branch employees)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   toggleStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ToggleUserStatusDto,
@@ -169,11 +162,9 @@ export class UserController {
   }
 
   @Patch(':id/toggle-blocked')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary:
-      'Toggle user blocked state - superadmin, admin, manager (own branch employees)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   toggleBlocked(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ToggleUserBlockedDto,
@@ -183,10 +174,9 @@ export class UserController {
   }
 
   @Patch(':id/change-password')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin')
-  @ApiOperation({
-    summary: 'Change user password - superadmin, admin (own company)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin' })
   changePassword(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ChangePasswordDto,
@@ -196,8 +186,9 @@ export class UserController {
   }
 
   @Delete(':id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin')
-  @ApiOperation({ summary: 'Delete user - superadmin, admin (own company)' })
+  @ApiOperation({ summary: 'superadmin, admin' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

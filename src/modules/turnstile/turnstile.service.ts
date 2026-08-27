@@ -12,7 +12,7 @@ import type {
   TerminalEventType,
   User,
 } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import {
   calculateMinutesDifference,
   toZonedDateOnly,

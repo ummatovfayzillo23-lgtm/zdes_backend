@@ -66,7 +66,7 @@ Content-Type: application/json
 ## 4. `PATCH /users/:id` — boshqa userni tahrirlash
 
 - **superadmin** — istalgan userni, istalgan maydonini (rol, kompaniya, filial dahil) o'zgartira oladi.
-- **admin** — o'z kompaniyasidagi (`assertWithinScope`) `admin`/`manager`/`employee`larni to'liq tahrirlaydi; `dto.companyId` boshqa qiymatga o'zgartirilsa yoki nishon/berilgan rol `superadmin` bo'lsa — `403`.
+- **admin** — o'z kompaniyasidagi (`checkAccess`) `admin`/`manager`/`employee`larni to'liq tahrirlaydi; `dto.companyId` boshqa qiymatga o'zgartirilsa yoki nishon/berilgan rol `superadmin` bo'lsa — `403`.
 - **manager** — o'z filialidagi `employee` userlarni tahrirlaydi (ism, telefon, email, manzil, bo'lim, lavozim, tug'ilgan sana va h.k.), **lekin quyidagi maydonlarni o'zgartirishga urinsa — `403 "Manager cannot change role, company or branch"`**: `role`, `companyId`, `branchId`.
 
 Bu mantiq `user.service.ts`dagi `update()` metodida amalga oshirilgan:
@@ -142,9 +142,9 @@ createdAt, updatedAt
 
 Scoping umumiy `src/common/utils/scope.util.ts` yordamchi funksiyalari orqali amalga oshiriladi:
 
-- **`resolveCompanyBranchScope(actor, requested)`** — `GET /users` uchun: `superadmin` so'ralgan filtrlarni o'zgarishsiz qabul qiladi; `admin` uchun `companyId` majburiy `actor.companyId`ga almashtiriladi; `manager` uchun ham `companyId`, ham `branchId` majburiy `actor.companyId`/`actor.branchId`ga almashtiriladi. Doiradan tashqari qiymat so'ralsa — `403`.
-- **`resolveScopedCompanyId(actor, providedCompanyId)`** — `POST /users` uchun: `superadmin`da `companyId` DTOda berilishi shart emas (chunki `User.companyId` nullable); `admin`da avtomatik `actor.companyId` bilan to'ldiriladi, boshqa qiymat yuborsa — `403`.
-- **`assertWithinScope(actor, target)`** — mavjud yozuv ustida amal (`findOne`/`update`/`toggle-*`/`delete`/`me`) bajarishdan oldin: `admin` uchun `target.companyId !== actor.companyId` bo'lsa `403`; `manager` uchun qo'shimcha `target.branchId !== actor.branchId` bo'lsa ham `403`.
+- **`getScope(actor, requested)`** — `GET /users` uchun: `superadmin` so'ralgan filtrlarni o'zgarishsiz qabul qiladi; `admin` uchun `companyId` majburiy `actor.companyId`ga almashtiriladi; `manager` uchun ham `companyId`, ham `branchId` majburiy `actor.companyId`/`actor.branchId`ga almashtiriladi. Doiradan tashqari qiymat so'ralsa — `403`.
+- **`getCompanyId(actor, providedCompanyId)`** — `POST /users` uchun: `superadmin`da `companyId` DTOda berilishi shart emas (chunki `User.companyId` nullable); `admin`da avtomatik `actor.companyId` bilan to'ldiriladi, boshqa qiymat yuborsa — `403`.
+- **`checkAccess(actor, target)`** — mavjud yozuv ustida amal (`findOne`/`update`/`toggle-*`/`delete`/`me`) bajarishdan oldin: `admin` uchun `target.companyId !== actor.companyId` bo'lsa `403`; `manager` uchun qo'shimcha `target.branchId !== actor.branchId` bo'lsa ham `403`.
 - **Manager + rol cheklovi** (faqat User modulida, `assertUserWithinScope` orqali) — manager uchun nishon userning `role !== 'employee'` bo'lsa, scoping to'g'ri bo'lsa ham — `403`.
 
 ## 8. DTO'lar (`./dto/`)

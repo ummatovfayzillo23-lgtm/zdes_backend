@@ -20,14 +20,14 @@ import { UpdateBranchDto } from './dto/update-branch.dto';
 import { BranchService } from './branch.service';
 
 @ApiTags('Branches')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin')
 @Controller('branches')
 export class BranchController {
   constructor(private readonly branchService: BranchService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create branch - superadmin, admin (own company)' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   create(
     @Body() dto: CreateBranchDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -36,9 +36,9 @@ export class BranchController {
   }
 
   @Get()
-  @ApiOperation({
-    summary: 'Get branches - superadmin (all), admin (own company)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   findAll(
     @Query() query: BranchQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -47,7 +47,9 @@ export class BranchController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get branch by id - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -56,7 +58,9 @@ export class BranchController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update branch - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBranchDto,
@@ -66,7 +70,9 @@ export class BranchController {
   }
 
   @Patch(':id/toggle-status')
-  @ApiOperation({ summary: 'Toggle branch status - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   toggleStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ToggleBranchStatusDto,
@@ -76,7 +82,9 @@ export class BranchController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete branch - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

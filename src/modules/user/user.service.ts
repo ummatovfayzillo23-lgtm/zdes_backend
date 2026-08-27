@@ -4,18 +4,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import type { Prisma, UserRole } from '@prisma/client';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { PasswordService } from '../auth/services/password.service';
 import { trimToNull } from '../../common/utils/helpers';
+import { getFile, buildUploadUrl } from '../../common/upload/image-upload.util';
 import {
-  assertFileProvided,
-  buildUploadUrl,
-} from '../../common/upload/image-upload.util';
-import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-  resolveScopedCompanyId,
+  checkAccess,
+  getScope,
+  getCompanyId,
 } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -57,6 +54,47 @@ const USER_SELECT = {
   updatedAt: true,
 } satisfies Prisma.UserSelect;
 
+type Search = { contains: string; mode: 'insensitive' };
+
+type UserFilter = {
+  companyId?: string;
+  branchId?: string;
+  departmentId?: string;
+  positionId?: string;
+  isActive?: boolean;
+  isBlocked?: boolean;
+  role?: UserRole;
+  OR?: {
+    login?: Search;
+    firstName?: Search;
+    lastName?: Search;
+    phone?: Search;
+    email?: Search;
+    employeeNo?: Search;
+  }[];
+};
+
+type UserData = {
+  login?: string;
+  role?: UserRole;
+  companyId?: string | null;
+  branchId?: string | null;
+  departmentId?: string | null;
+  positionId?: string | null;
+  managerId?: string | null;
+  workScheduleId?: string | null;
+  employeeNo?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  middleName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  passportSerial?: string | null;
+  dateOfBirth?: Date | null;
+  baseSalary?: number | null;
+};
+
 @Injectable()
 export class UserService {
   constructor(
@@ -69,31 +107,43 @@ export class UserService {
       throw new ForbiddenException('Cannot create a superadmin user');
     }
 
-    // User.companyId is nullable (superadmin needs none); admin is still forced into its own company.
-    const companyId =
-      actor.role === 'superadmin'
-        ? dto.companyId
-        : resolveScopedCompanyId(actor, dto.companyId);
+    let companyId = dto.companyId;
+    if (actor.role !== 'superadmin') {
+      companyId = getCompanyId(actor, dto.companyId);
+    }
 
-    const login = this.normalizeRequiredField(dto.login, 'login');
-    await this.ensureLoginIsUnique(login);
+    const login = trimToNull(dto.login);
+    if (!login) {
+      throw new ConflictException('Login is required');
+    }
+    await this.checkLoginUnique(login);
 
     const email = trimToNull(dto.email);
-    if (email) await this.ensureEmailIsUnique(email);
+    if (email) {
+      await this.checkEmailUnique(email);
+    }
 
-    if (companyId) await this.ensureCompanyExists(companyId);
-    if (dto.branchId)
-      await this.ensureBranchBelongsToCompany(dto.branchId, companyId);
-    if (dto.departmentId)
-      await this.ensureDepartmentBelongsToCompany(dto.departmentId, companyId);
-    if (dto.positionId)
-      await this.ensurePositionBelongsToCompany(dto.positionId, companyId);
-    if (dto.managerId) await this.ensureUserExists(dto.managerId);
-    if (dto.workScheduleId)
-      await this.ensureWorkScheduleExists(dto.workScheduleId);
+    if (companyId) {
+      await this.checkCompany(companyId);
+    }
+    if (dto.branchId) {
+      await this.checkBranch(dto.branchId, companyId);
+    }
+    if (dto.departmentId) {
+      await this.checkDepartment(dto.departmentId, companyId);
+    }
+    if (dto.positionId) {
+      await this.checkPosition(dto.positionId, companyId);
+    }
+    if (dto.managerId) {
+      await this.checkManager(dto.managerId);
+    }
+    if (dto.workScheduleId) {
+      await this.checkWorkSchedule(dto.workScheduleId);
+    }
 
     if (dto.employeeNo && companyId) {
-      await this.ensureEmployeeNoIsUnique(companyId, dto.employeeNo);
+      await this.checkEmployeeNoUnique(companyId, dto.employeeNo);
     }
 
     const passwordHash = await this.passwordService.hashPassword(dto.password);
@@ -128,39 +178,49 @@ export class UserService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const search = trimToNull(query.search);
-    const scope = resolveCompanyBranchScope(actor, {
+
+    const scope = getScope(actor, {
       companyId: query.companyId,
       branchId: query.branchId,
     });
-    // Manager only manages employees, never peer managers/admins.
     const forcedRole = actor.role === 'manager' ? 'employee' : query.role;
 
-    const baseWhere: Prisma.UserWhereInput = {
-      ...(scope.companyId ? { companyId: scope.companyId } : {}),
-      ...(scope.branchId ? { branchId: scope.branchId } : {}),
-      ...(query.departmentId ? { departmentId: query.departmentId } : {}),
-      ...(query.positionId ? { positionId: query.positionId } : {}),
-      ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
-      ...(query.isBlocked !== undefined ? { isBlocked: query.isBlocked } : {}),
-      ...(search
-        ? {
-            OR: [
-              { login: { contains: search, mode: 'insensitive' } },
-              { firstName: { contains: search, mode: 'insensitive' } },
-              { lastName: { contains: search, mode: 'insensitive' } },
-              { phone: { contains: search, mode: 'insensitive' } },
-              { email: { contains: search, mode: 'insensitive' } },
-              { employeeNo: { contains: search, mode: 'insensitive' } },
-            ],
-          }
-        : {}),
-    };
+    const baseWhere: UserFilter = {};
+    if (scope.companyId) {
+      baseWhere.companyId = scope.companyId;
+    }
+    if (scope.branchId) {
+      baseWhere.branchId = scope.branchId;
+    }
+    if (query.departmentId) {
+      baseWhere.departmentId = query.departmentId;
+    }
+    if (query.positionId) {
+      baseWhere.positionId = query.positionId;
+    }
+    if (query.isActive !== undefined) {
+      baseWhere.isActive = query.isActive;
+    }
+    if (query.isBlocked !== undefined) {
+      baseWhere.isBlocked = query.isBlocked;
+    }
 
-    const where: Prisma.UserWhereInput = {
-      ...baseWhere,
-      ...(forcedRole ? { role: forcedRole } : {}),
-    };
+    const search = trimToNull(query.search);
+    if (search) {
+      baseWhere.OR = [
+        { login: { contains: search, mode: 'insensitive' } },
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { employeeNo: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const where: UserFilter = { ...baseWhere };
+    if (forcedRole) {
+      where.role = forcedRole;
+    }
 
     const [items, total, roleCounts] = await this.prisma.$transaction([
       this.prisma.user.findMany({
@@ -197,14 +257,14 @@ export class UserService {
   }
 
   async findOne(id: string, actor: AccessTokenPayload) {
-    const user = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, user);
+    const user = await this.getUserById(id);
+    this.checkUserAccess(actor, user);
     return user;
   }
 
   async update(id: string, dto: UpdateUserDto, actor: AccessTokenPayload) {
-    const existing = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, existing);
+    const existing = await this.getUserById(id);
+    this.checkUserAccess(actor, existing);
 
     if (
       actor.role !== 'superadmin' &&
@@ -232,137 +292,168 @@ export class UserService {
       );
     }
 
-    const login = dto.login
-      ? this.normalizeRequiredField(dto.login, 'login')
-      : undefined;
-    if (login) await this.ensureLoginIsUnique(login, id);
+    let login: string | undefined;
+    if (dto.login) {
+      login = trimToNull(dto.login) ?? undefined;
+      if (!login) {
+        throw new ConflictException('Login is required');
+      }
+      await this.checkLoginUnique(login, id);
+    }
 
-    const email = dto.email !== undefined ? trimToNull(dto.email) : undefined;
-    if (email) await this.ensureEmailIsUnique(email, id);
+    let email: string | null | undefined;
+    if (dto.email !== undefined) {
+      email = trimToNull(dto.email);
+      if (email) {
+        await this.checkEmailUnique(email, id);
+      }
+    }
 
-    const companyId =
-      dto.companyId !== undefined
-        ? (dto.companyId ?? null)
-        : existing.companyId;
+    let companyId = existing.companyId;
+    if (dto.companyId !== undefined) {
+      companyId = dto.companyId ?? null;
+    }
 
-    if (dto.companyId) await this.ensureCompanyExists(dto.companyId);
-    if (dto.branchId)
-      await this.ensureBranchBelongsToCompany(
-        dto.branchId,
-        companyId ?? undefined,
-      );
-    if (dto.departmentId)
-      await this.ensureDepartmentBelongsToCompany(
-        dto.departmentId,
-        companyId ?? undefined,
-      );
-    if (dto.positionId)
-      await this.ensurePositionBelongsToCompany(
-        dto.positionId,
-        companyId ?? undefined,
-      );
-    if (dto.managerId) await this.ensureUserExists(dto.managerId);
-    if (dto.workScheduleId)
-      await this.ensureWorkScheduleExists(dto.workScheduleId);
+    if (dto.companyId) {
+      await this.checkCompany(dto.companyId);
+    }
+    if (dto.branchId) {
+      await this.checkBranch(dto.branchId, companyId ?? undefined);
+    }
+    if (dto.departmentId) {
+      await this.checkDepartment(dto.departmentId, companyId ?? undefined);
+    }
+    if (dto.positionId) {
+      await this.checkPosition(dto.positionId, companyId ?? undefined);
+    }
+    if (dto.managerId) {
+      await this.checkManager(dto.managerId);
+    }
+    if (dto.workScheduleId) {
+      await this.checkWorkSchedule(dto.workScheduleId);
+    }
 
-    const employeeNo =
-      dto.employeeNo !== undefined ? trimToNull(dto.employeeNo) : undefined;
-    if (employeeNo && companyId) {
-      await this.ensureEmployeeNoIsUnique(companyId, employeeNo, id);
+    let employeeNo: string | null | undefined;
+    if (dto.employeeNo !== undefined) {
+      employeeNo = trimToNull(dto.employeeNo);
+      if (employeeNo && companyId) {
+        await this.checkEmployeeNoUnique(companyId, employeeNo, id);
+      }
+    }
+
+    const data: UserData = {};
+    if (login) {
+      data.login = login;
+    }
+    if (dto.role) {
+      data.role = dto.role;
+    }
+    if (dto.companyId !== undefined) {
+      data.companyId = dto.companyId ?? null;
+    }
+    if (dto.branchId !== undefined) {
+      data.branchId = dto.branchId ?? null;
+    }
+    if (dto.departmentId !== undefined) {
+      data.departmentId = dto.departmentId ?? null;
+    }
+    if (dto.positionId !== undefined) {
+      data.positionId = dto.positionId ?? null;
+    }
+    if (dto.managerId !== undefined) {
+      data.managerId = dto.managerId ?? null;
+    }
+    if (dto.workScheduleId !== undefined) {
+      data.workScheduleId = dto.workScheduleId ?? null;
+    }
+    if (employeeNo !== undefined) {
+      data.employeeNo = employeeNo;
+    }
+    if (dto.firstName !== undefined) {
+      data.firstName = trimToNull(dto.firstName);
+    }
+    if (dto.lastName !== undefined) {
+      data.lastName = trimToNull(dto.lastName);
+    }
+    if (dto.middleName !== undefined) {
+      data.middleName = trimToNull(dto.middleName);
+    }
+    if (dto.phone !== undefined) {
+      data.phone = trimToNull(dto.phone);
+    }
+    if (email !== undefined) {
+      data.email = email;
+    }
+    if (dto.address !== undefined) {
+      data.address = trimToNull(dto.address);
+    }
+    if (dto.passportSerial !== undefined) {
+      data.passportSerial = trimToNull(dto.passportSerial);
+    }
+    if (dto.dateOfBirth !== undefined) {
+      data.dateOfBirth = dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
+    }
+    if (dto.baseSalary !== undefined) {
+      data.baseSalary = dto.baseSalary ?? null;
     }
 
     return this.prisma.user.update({
       where: { id },
-      data: {
-        ...(login ? { login } : {}),
-        ...(dto.role ? { role: dto.role } : {}),
-        ...(dto.companyId !== undefined
-          ? { companyId: dto.companyId ?? null }
-          : {}),
-        ...(dto.branchId !== undefined
-          ? { branchId: dto.branchId ?? null }
-          : {}),
-        ...(dto.departmentId !== undefined
-          ? { departmentId: dto.departmentId ?? null }
-          : {}),
-        ...(dto.positionId !== undefined
-          ? { positionId: dto.positionId ?? null }
-          : {}),
-        ...(dto.managerId !== undefined
-          ? { managerId: dto.managerId ?? null }
-          : {}),
-        ...(dto.workScheduleId !== undefined
-          ? { workScheduleId: dto.workScheduleId ?? null }
-          : {}),
-        ...(employeeNo !== undefined ? { employeeNo } : {}),
-        ...(dto.firstName !== undefined
-          ? { firstName: trimToNull(dto.firstName) }
-          : {}),
-        ...(dto.lastName !== undefined
-          ? { lastName: trimToNull(dto.lastName) }
-          : {}),
-        ...(dto.middleName !== undefined
-          ? { middleName: trimToNull(dto.middleName) }
-          : {}),
-        ...(dto.phone !== undefined ? { phone: trimToNull(dto.phone) } : {}),
-        ...(email !== undefined ? { email } : {}),
-        ...(dto.address !== undefined
-          ? { address: trimToNull(dto.address) }
-          : {}),
-        ...(dto.passportSerial !== undefined
-          ? { passportSerial: trimToNull(dto.passportSerial) }
-          : {}),
-        ...(dto.dateOfBirth !== undefined
-          ? { dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null }
-          : {}),
-        ...(dto.baseSalary !== undefined
-          ? { baseSalary: dto.baseSalary ?? null }
-          : {}),
-      },
+      data,
       select: USER_SELECT,
     });
   }
 
   async updateOwnProfile(actor: AccessTokenPayload, dto: UpdateOwnProfileDto) {
-    const existing = await this.findUserByIdOrThrow(actor.sub);
+    const existing = await this.getUserById(actor.sub);
 
-    const email = dto.email !== undefined ? trimToNull(dto.email) : undefined;
-    if (email) await this.ensureEmailIsUnique(email, existing.id);
+    let email: string | null | undefined;
+    if (dto.email !== undefined) {
+      email = trimToNull(dto.email);
+      if (email) {
+        await this.checkEmailUnique(email, existing.id);
+      }
+    }
+
+    const data: UserData = {};
+    if (dto.firstName !== undefined) {
+      data.firstName = trimToNull(dto.firstName);
+    }
+    if (dto.lastName !== undefined) {
+      data.lastName = trimToNull(dto.lastName);
+    }
+    if (dto.middleName !== undefined) {
+      data.middleName = trimToNull(dto.middleName);
+    }
+    if (dto.phone !== undefined) {
+      data.phone = trimToNull(dto.phone);
+    }
+    if (email !== undefined) {
+      data.email = email;
+    }
+    if (dto.address !== undefined) {
+      data.address = trimToNull(dto.address);
+    }
+    if (dto.passportSerial !== undefined) {
+      data.passportSerial = trimToNull(dto.passportSerial);
+    }
+    if (dto.dateOfBirth !== undefined) {
+      data.dateOfBirth = dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
+    }
 
     return this.prisma.user.update({
       where: { id: existing.id },
-      data: {
-        ...(dto.firstName !== undefined
-          ? { firstName: trimToNull(dto.firstName) }
-          : {}),
-        ...(dto.lastName !== undefined
-          ? { lastName: trimToNull(dto.lastName) }
-          : {}),
-        ...(dto.middleName !== undefined
-          ? { middleName: trimToNull(dto.middleName) }
-          : {}),
-        ...(dto.phone !== undefined ? { phone: trimToNull(dto.phone) } : {}),
-        ...(email !== undefined ? { email } : {}),
-        ...(dto.address !== undefined
-          ? { address: trimToNull(dto.address) }
-          : {}),
-        ...(dto.passportSerial !== undefined
-          ? { passportSerial: trimToNull(dto.passportSerial) }
-          : {}),
-        ...(dto.dateOfBirth !== undefined
-          ? { dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null }
-          : {}),
-      },
+      data,
       select: USER_SELECT,
     });
   }
 
   async updateOwnAvatar(actor: AccessTokenPayload, file?: Express.Multer.File) {
-    const uploadedFile = assertFileProvided(file);
+    const uploaded = getFile(file);
 
     return this.prisma.user.update({
       where: { id: actor.sub },
-      data: { avatarUrl: buildUploadUrl('avatars', uploadedFile.filename) },
+      data: { avatarUrl: buildUploadUrl('avatars', uploaded.filename) },
       select: USER_SELECT,
     });
   }
@@ -372,13 +463,13 @@ export class UserService {
     actor: AccessTokenPayload,
     file?: Express.Multer.File,
   ) {
-    const user = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, user);
-    const uploadedFile = assertFileProvided(file);
+    const user = await this.getUserById(id);
+    this.checkUserAccess(actor, user);
+    const uploaded = getFile(file);
 
     return this.prisma.user.update({
       where: { id },
-      data: { avatarUrl: buildUploadUrl('avatars', uploadedFile.filename) },
+      data: { avatarUrl: buildUploadUrl('avatars', uploaded.filename) },
       select: USER_SELECT,
     });
   }
@@ -388,13 +479,13 @@ export class UserService {
     actor: AccessTokenPayload,
     file?: Express.Multer.File,
   ) {
-    const user = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, user);
-    const uploadedFile = assertFileProvided(file);
+    const user = await this.getUserById(id);
+    this.checkUserAccess(actor, user);
+    const uploaded = getFile(file);
 
     return this.prisma.user.update({
       where: { id },
-      data: { faceImageUrl: buildUploadUrl('faces', uploadedFile.filename) },
+      data: { faceImageUrl: buildUploadUrl('faces', uploaded.filename) },
       select: USER_SELECT,
     });
   }
@@ -404,8 +495,8 @@ export class UserService {
     dto: ToggleUserStatusDto,
     actor: AccessTokenPayload,
   ) {
-    const user = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, user);
+    const user = await this.getUserById(id);
+    this.checkUserAccess(actor, user);
     const nextIsActive = dto.isActive ?? !user.isActive;
 
     return this.prisma.user.update({
@@ -420,8 +511,8 @@ export class UserService {
     dto: ToggleUserBlockedDto,
     actor: AccessTokenPayload,
   ) {
-    const user = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, user);
+    const user = await this.getUserById(id);
+    this.checkUserAccess(actor, user);
     const nextIsBlocked = dto.isBlocked ?? !user.isBlocked;
 
     return this.prisma.user.update({
@@ -436,8 +527,8 @@ export class UserService {
     dto: ChangePasswordDto,
     actor: AccessTokenPayload,
   ) {
-    const user = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, user);
+    const user = await this.getUserById(id);
+    this.checkUserAccess(actor, user);
     if (actor.role !== 'superadmin' && user.role === 'superadmin') {
       throw new ForbiddenException('Cannot modify a superadmin user');
     }
@@ -454,8 +545,8 @@ export class UserService {
   }
 
   async delete(id: string, actor: AccessTokenPayload) {
-    const user = await this.findUserByIdOrThrow(id);
-    this.assertUserWithinScope(actor, user);
+    const user = await this.getUserById(id);
+    this.checkUserAccess(actor, user);
     if (actor.role !== 'superadmin' && user.role === 'superadmin') {
       throw new ForbiddenException('Cannot delete a superadmin user');
     }
@@ -464,11 +555,11 @@ export class UserService {
     return { success: true as const, id };
   }
 
-  private assertUserWithinScope(
+  private checkUserAccess(
     actor: AccessTokenPayload,
     target: { companyId: string | null; branchId: string | null; role: string },
   ): void {
-    assertWithinScope(actor, target);
+    checkAccess(actor, target);
     if (actor.role === 'manager' && target.role !== 'employee') {
       throw new ForbiddenException(
         'Manager can only manage employee-role users',
@@ -476,62 +567,69 @@ export class UserService {
     }
   }
 
-  private async findUserByIdOrThrow(id: string) {
+  private async getUserById(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
       select: USER_SELECT,
     });
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
     return user;
   }
 
-  private async ensureLoginIsUnique(
+  private async checkLoginUnique(
     login: string,
     excludedId?: string,
   ): Promise<void> {
     const existing = await this.prisma.user.findFirst({
-      where: { login, ...(excludedId ? { id: { not: excludedId } } : {}) },
+      where: excludedId ? { login, id: { not: excludedId } } : { login },
     });
-    if (existing) throw new ConflictException('Login already exists');
+    if (existing) {
+      throw new ConflictException('Login already exists');
+    }
   }
 
-  private async ensureEmailIsUnique(
+  private async checkEmailUnique(
     email: string,
     excludedId?: string,
   ): Promise<void> {
     const existing = await this.prisma.user.findFirst({
-      where: { email, ...(excludedId ? { id: { not: excludedId } } : {}) },
+      where: excludedId ? { email, id: { not: excludedId } } : { email },
     });
-    if (existing) throw new ConflictException('Email already exists');
+    if (existing) {
+      throw new ConflictException('Email already exists');
+    }
   }
 
-  private async ensureEmployeeNoIsUnique(
+  private async checkEmployeeNoUnique(
     companyId: string,
     employeeNo: string,
     excludedId?: string,
   ): Promise<void> {
     const existing = await this.prisma.user.findFirst({
-      where: {
-        companyId,
-        employeeNo,
-        ...(excludedId ? { id: { not: excludedId } } : {}),
-      },
+      where: excludedId
+        ? { companyId, employeeNo, id: { not: excludedId } }
+        : { companyId, employeeNo },
     });
-    if (existing)
+    if (existing) {
       throw new ConflictException(
         'Employee number already exists in this company',
       );
+    }
   }
 
-  private async ensureCompanyExists(companyId: string): Promise<void> {
+  private async checkCompany(companyId: string): Promise<void> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { id: true },
     });
-    if (!company) throw new NotFoundException('Company not found');
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
   }
 
-  private async ensureBranchBelongsToCompany(
+  private async checkBranch(
     branchId: string,
     companyId?: string,
   ): Promise<void> {
@@ -539,15 +637,15 @@ export class UserService {
       where: { id: branchId },
       select: { id: true, companyId: true },
     });
-    if (!branch) throw new NotFoundException('Branch not found');
+    if (!branch) {
+      throw new NotFoundException('Branch not found');
+    }
     if (companyId && branch.companyId !== companyId) {
-      throw new ConflictException(
-        'Branch does not belong to the selected company',
-      );
+      throw new ConflictException('Branch is not in this company');
     }
   }
 
-  private async ensureDepartmentBelongsToCompany(
+  private async checkDepartment(
     departmentId: string,
     companyId?: string,
   ): Promise<void> {
@@ -555,15 +653,15 @@ export class UserService {
       where: { id: departmentId },
       select: { id: true, companyId: true },
     });
-    if (!department) throw new NotFoundException('Department not found');
+    if (!department) {
+      throw new NotFoundException('Department not found');
+    }
     if (companyId && department.companyId !== companyId) {
-      throw new ConflictException(
-        'Department does not belong to the selected company',
-      );
+      throw new ConflictException('Department is not in this company');
     }
   }
 
-  private async ensurePositionBelongsToCompany(
+  private async checkPosition(
     positionId: string,
     companyId?: string,
   ): Promise<void> {
@@ -571,35 +669,31 @@ export class UserService {
       where: { id: positionId },
       select: { id: true, companyId: true },
     });
-    if (!position) throw new NotFoundException('Position not found');
+    if (!position) {
+      throw new NotFoundException('Position not found');
+    }
     if (companyId && position.companyId !== companyId) {
-      throw new ConflictException(
-        'Position does not belong to the selected company',
-      );
+      throw new ConflictException('Position is not in this company');
     }
   }
 
-  private async ensureUserExists(userId: string): Promise<void> {
+  private async checkManager(userId: string): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true },
     });
-    if (!user) throw new NotFoundException('Manager not found');
+    if (!user) {
+      throw new NotFoundException('Manager not found');
+    }
   }
 
-  private async ensureWorkScheduleExists(
-    workScheduleId: string,
-  ): Promise<void> {
+  private async checkWorkSchedule(workScheduleId: string): Promise<void> {
     const ws = await this.prisma.workSchedule.findUnique({
       where: { id: workScheduleId },
       select: { id: true },
     });
-    if (!ws) throw new NotFoundException('Work schedule not found');
-  }
-
-  private normalizeRequiredField(value: string, fieldName: string): string {
-    const normalized = trimToNull(value);
-    if (!normalized) throw new ConflictException(`${fieldName} is required`);
-    return normalized;
+    if (!ws) {
+      throw new NotFoundException('Work schedule not found');
+    }
   }
 }

@@ -19,14 +19,14 @@ import { UpdateSettingDto } from './dto/update-setting.dto';
 import { SettingService } from './setting.service';
 
 @ApiTags('Settings')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin')
 @Controller('settings')
 export class SettingController {
   constructor(private readonly settingService: SettingService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create setting - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   create(
     @Body() dto: CreateSettingDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -35,7 +35,9 @@ export class SettingController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get settings - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   findAll(
     @Query() query: SettingQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -44,7 +46,9 @@ export class SettingController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get setting by id - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -53,7 +57,9 @@ export class SettingController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update setting - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSettingDto,
@@ -63,7 +69,9 @@ export class SettingController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete setting - superadmin, admin' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

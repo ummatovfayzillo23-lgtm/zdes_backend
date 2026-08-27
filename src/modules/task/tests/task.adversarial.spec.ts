@@ -141,7 +141,7 @@ describe('Adversarial & Stress Test Suite: Task Management Module', () => {
   // 1. Cross-Tenant Isolation Attacks
   // ==========================================================================
   describe('1. Cross-Tenant Isolation Attacks', () => {
-    it('ADV-TENANT-01: Admin from Company 1 cannot read task of Company 2 (assertWithinScope)', async () => {
+    it('ADV-TENANT-01: Admin from Company 1 cannot read task of Company 2 (checkAccess)', async () => {
       mockPrisma.task.findUnique.mockResolvedValue({
         id: 'task-c2-uuid',
         companyId: company2,

@@ -1,9 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { AppVersionQueryDto } from './dto/app-version-query.dto';
 import { CreateAppVersionDto } from './dto/create-app-version.dto';
 import { UpdateAppVersionDto } from './dto/update-app-version.dto';
+
+type AppVersionData = {
+  android?: Prisma.InputJsonValue;
+  ios?: Prisma.InputJsonValue;
+};
 
 @Injectable()
 export class AppVersionService {
@@ -32,33 +37,43 @@ export class AppVersionService {
       this.prisma.appVersion.count(),
     ]);
 
-    return { items, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
   async findOne(id: string) {
-    return this.findAppVersionByIdOrThrow(id);
+    return this.getAppVersionById(id);
   }
 
   async update(id: string, dto: UpdateAppVersionDto) {
-    await this.findAppVersionByIdOrThrow(id);
+    await this.getAppVersionById(id);
 
-    return this.prisma.appVersion.update({
-      where: { id },
-      data: {
-        ...(dto.android !== undefined ? { android: dto.android as Prisma.InputJsonValue } : {}),
-        ...(dto.ios !== undefined ? { ios: dto.ios as Prisma.InputJsonValue } : {}),
-      },
-    });
+    const data: AppVersionData = {};
+    if (dto.android !== undefined) {
+      data.android = dto.android as Prisma.InputJsonValue;
+    }
+    if (dto.ios !== undefined) {
+      data.ios = dto.ios as Prisma.InputJsonValue;
+    }
+
+    return this.prisma.appVersion.update({ where: { id }, data });
   }
 
   async delete(id: string) {
-    await this.findAppVersionByIdOrThrow(id);
+    await this.getAppVersionById(id);
     await this.prisma.appVersion.delete({ where: { id } });
     return { success: true as const, id };
   }
 
-  private async findAppVersionByIdOrThrow(id: string) {
-    const appVersion = await this.prisma.appVersion.findUnique({ where: { id } });
+  private async getAppVersionById(id: string) {
+    const appVersion = await this.prisma.appVersion.findUnique({
+      where: { id },
+    });
     if (!appVersion) {
       throw new NotFoundException('App version not found');
     }

@@ -57,7 +57,7 @@ export function buildUploadUrl(
   return baseUrl ? `${baseUrl}${relativePath}` : relativePath;
 }
 
-export function assertFileProvided(
+export function getFile(
   file?: Express.Multer.File,
 ): Express.Multer.File {
   if (!file) {

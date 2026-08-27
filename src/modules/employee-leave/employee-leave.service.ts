@@ -5,13 +5,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import type { LeaveRequestStatus, LeaveType } from '@prisma/client';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
 import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-  resolveScopedCompanyId,
+  checkAccess,
+  getScope,
+  getCompanyId,
 } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { NotificationService } from '../notification/notification.service';
@@ -21,6 +21,40 @@ import { EmployeeLeaveQueryDto } from './dto/employee-leave-query.dto';
 import { RequestEmployeeLeaveDto } from './dto/request-employee-leave.dto';
 import { UpdateEmployeeLeaveDto } from './dto/update-employee-leave.dto';
 
+type LeaveDateFilter = { fromDate: { lte: Date } } | { toDate: { gte: Date } };
+
+type LeaveFilter = {
+  companyId?: string;
+  branchId?: string;
+  employeeId?: string;
+  type?: LeaveType;
+  status?: LeaveRequestStatus;
+  affectsSalary?: boolean;
+  reason?: { contains: string; mode: 'insensitive' };
+  AND?: LeaveDateFilter[];
+};
+
+type LeaveData = {
+  companyId: string;
+  branchId: string | null;
+  employeeId: string;
+  fromDate: Date;
+  toDate: Date;
+  days: number;
+  updatedById: string;
+  type?: LeaveType;
+  affectsSalary?: boolean;
+  reason?: string | null;
+};
+
+type Employee = {
+  id: string;
+  companyId: string | null;
+  branchId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+};
+
 @Injectable()
 export class EmployeeLeaveService {
   constructor(
@@ -28,25 +62,22 @@ export class EmployeeLeaveService {
     private readonly notification: NotificationService,
   ) {}
 
-  /** Direct grant by superadmin/admin — immediately approved, no request cycle. */
   async create(dto: CreateEmployeeLeaveDto, actor: AccessTokenPayload) {
-    const scopedCompanyId = resolveScopedCompanyId(actor, dto.companyId);
-    const scope = resolveCompanyBranchScope(actor, {
-      companyId: scopedCompanyId,
+    const companyId = getCompanyId(actor, dto.companyId);
+    const scope = getScope(actor, {
+      companyId,
       branchId: dto.branchId,
     });
-    const companyId = await this.ensureCompanyExists(scopedCompanyId);
-    const branchId = await this.resolveBranchId(companyId, scope.branchId);
+    await this.checkCompany(companyId);
+    const branchId = await this.checkBranch(companyId, scope.branchId);
+
     const fromDate = new Date(dto.fromDate);
     const toDate = new Date(dto.toDate);
+    if (toDate < fromDate) {
+      throw new BadRequestException('End date must be after start date');
+    }
 
-    this.ensureDateRange(
-      fromDate,
-      toDate,
-      'Leave end date must be after start date',
-    );
-
-    const days = this.resolveDays(dto.days, fromDate, toDate);
+    const days = this.getDays(dto.days, fromDate, toDate);
 
     if (dto.applyToAllEmployees) {
       return this.createForAllEmployees(
@@ -66,15 +97,10 @@ export class EmployeeLeaveService {
       );
     }
 
-    const employee = await this.ensureEmployeeBelongsToCompany(
-      dto.employeeId,
-      companyId,
-    );
+    const employee = await this.checkEmployee(dto.employeeId, companyId);
 
     if (branchId && employee.branchId && employee.branchId !== branchId) {
-      throw new ConflictException(
-        'Employee does not belong to the selected branch',
-      );
+      throw new ConflictException('Employee is not in the selected branch');
     }
 
     const employeeLeave = await this.prisma.employeeLeave.create({
@@ -169,7 +195,6 @@ export class EmployeeLeaveService {
     return { items, total: items.length };
   }
 
-  /** Employee self-service — creates a pending request awaiting approval. */
   async request(dto: RequestEmployeeLeaveDto, actor: AccessTokenPayload) {
     const employee = await this.prisma.user.findUnique({
       where: { id: actor.sub },
@@ -211,12 +236,10 @@ export class EmployeeLeaveService {
         throw new BadRequestException('toDate is required for multi_day leave');
       }
       toDate = new Date(dto.toDate);
-      this.ensureDateRange(
-        fromDate,
-        toDate,
-        'Leave end date must be after start date',
-      );
-      days = this.resolveDays(undefined, fromDate, toDate);
+      if (toDate < fromDate) {
+        throw new BadRequestException('End date must be after start date');
+      }
+      days = this.getDays(undefined, fromDate, toDate);
     }
 
     const employeeLeave = await this.prisma.employeeLeave.create({
@@ -257,8 +280,8 @@ export class EmployeeLeaveService {
   }
 
   async approve(id: string, actor: AccessTokenPayload) {
-    const existing = await this.findEmployeeLeaveByIdOrThrow(id);
-    assertWithinScope(actor, existing);
+    const existing = await this.getLeaveById(id);
+    checkAccess(actor, existing);
 
     if (existing.status !== 'pending') {
       throw new ConflictException(
@@ -290,8 +313,8 @@ export class EmployeeLeaveService {
   }
 
   async reject(id: string, actor: AccessTokenPayload) {
-    const existing = await this.findEmployeeLeaveByIdOrThrow(id);
-    assertWithinScope(actor, existing);
+    const existing = await this.getLeaveById(id);
+    checkAccess(actor, existing);
 
     if (existing.status !== 'pending') {
       throw new ConflictException(
@@ -326,35 +349,46 @@ export class EmployeeLeaveService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const search = trimToNull(query.search);
-    const scope =
-      actor.role === 'employee'
-        ? {}
-        : resolveCompanyBranchScope(actor, {
-            companyId: query.companyId,
-            branchId: query.branchId,
-          });
 
-    const where: Prisma.EmployeeLeaveWhereInput = {
-      ...('companyId' in scope && scope.companyId
-        ? { companyId: scope.companyId }
-        : {}),
-      ...('branchId' in scope && scope.branchId
-        ? { branchId: scope.branchId }
-        : {}),
-      ...(actor.role === 'employee'
-        ? { employeeId: actor.sub }
-        : query.employeeId
-          ? { employeeId: query.employeeId }
-          : {}),
-      ...(query.type ? { type: query.type } : {}),
-      ...(query.status ? { status: query.status } : {}),
-      ...(query.affectsSalary !== undefined
-        ? { affectsSalary: query.affectsSalary }
-        : {}),
-      ...(search ? { reason: { contains: search, mode: 'insensitive' } } : {}),
-      ...this.buildDateOverlapFilter(query.dateFrom, query.dateTo),
-    };
+    const where: LeaveFilter = {};
+
+    if (actor.role === 'employee') {
+      where.employeeId = actor.sub;
+    } else {
+      const scope = getScope(actor, {
+        companyId: query.companyId,
+        branchId: query.branchId,
+      });
+      if (scope.companyId) {
+        where.companyId = scope.companyId;
+      }
+      if (scope.branchId) {
+        where.branchId = scope.branchId;
+      }
+      if (query.employeeId) {
+        where.employeeId = query.employeeId;
+      }
+    }
+
+    if (query.type) {
+      where.type = query.type;
+    }
+    if (query.status) {
+      where.status = query.status;
+    }
+    if (query.affectsSalary !== undefined) {
+      where.affectsSalary = query.affectsSalary;
+    }
+
+    const search = trimToNull(query.search);
+    if (search) {
+      where.reason = { contains: search, mode: 'insensitive' };
+    }
+
+    const dateFilter = this.buildDateFilter(query.dateFrom, query.dateTo);
+    if (dateFilter.length > 0) {
+      where.AND = dateFilter;
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.employeeLeave.findMany({
@@ -376,8 +410,8 @@ export class EmployeeLeaveService {
   }
 
   async findOne(id: string, actor: AccessTokenPayload) {
-    const employeeLeave = await this.findEmployeeLeaveByIdOrThrow(id);
-    this.assertEmployeeLeaveAccessible(actor, employeeLeave);
+    const employeeLeave = await this.getLeaveById(id);
+    this.checkLeaveAccess(actor, employeeLeave);
     return employeeLeave;
   }
 
@@ -386,103 +420,95 @@ export class EmployeeLeaveService {
     dto: UpdateEmployeeLeaveDto,
     actor: AccessTokenPayload,
   ) {
-    const existing = await this.findEmployeeLeaveByIdOrThrow(id);
-    assertWithinScope(actor, existing);
+    const existing = await this.getLeaveById(id);
+    checkAccess(actor, existing);
 
-    const companyId =
-      dto.companyId !== undefined
-        ? await this.ensureCompanyExists(
-            resolveScopedCompanyId(actor, dto.companyId),
-          )
-        : existing.companyId;
-    const scope = resolveCompanyBranchScope(actor, {
-      companyId,
-      branchId:
-        dto.branchId !== undefined
-          ? dto.branchId
-          : (existing.branchId ?? undefined),
-    });
-    const branchId =
-      dto.branchId !== undefined
-        ? await this.resolveBranchId(companyId, scope.branchId)
-        : await this.resolveBranchId(companyId, existing.branchId);
-    const employee =
-      dto.employeeId !== undefined
-        ? await this.ensureEmployeeBelongsToCompany(dto.employeeId, companyId)
-        : await this.ensureEmployeeBelongsToCompany(
-            existing.employeeId,
-            companyId,
-          );
-    const fromDate = dto.fromDate ? new Date(dto.fromDate) : existing.fromDate;
-    const toDate = dto.toDate ? new Date(dto.toDate) : existing.toDate;
-
-    this.ensureDateRange(
-      fromDate,
-      toDate,
-      'Leave end date must be after start date',
-    );
-
-    if (branchId && employee.branchId && employee.branchId !== branchId) {
-      throw new ConflictException(
-        'Employee does not belong to the selected branch',
-      );
+    let companyId = existing.companyId;
+    if (dto.companyId !== undefined) {
+      companyId = getCompanyId(actor, dto.companyId);
+      await this.checkCompany(companyId);
     }
 
-    const days =
-      dto.days !== undefined
-        ? this.resolveDays(dto.days, fromDate, toDate)
-        : dto.fromDate || dto.toDate
-          ? this.resolveDays(undefined, fromDate, toDate)
-          : existing.days;
-
-    return this.prisma.employeeLeave.update({
-      where: { id },
-      data: {
-        companyId,
-        branchId,
-        employeeId: employee.id,
-        ...(dto.type !== undefined ? { type: dto.type } : {}),
-        fromDate,
-        toDate,
-        days,
-        ...(dto.affectsSalary !== undefined
-          ? { affectsSalary: dto.affectsSalary }
-          : {}),
-        ...(dto.reason !== undefined ? { reason: trimToNull(dto.reason) } : {}),
-        updatedById: actor.sub,
-      },
+    const requestedBranchId =
+      dto.branchId !== undefined
+        ? dto.branchId
+        : (existing.branchId ?? undefined);
+    const scope = getScope(actor, {
+      companyId,
+      branchId: requestedBranchId,
     });
+    const branchId = await this.checkBranch(companyId, scope.branchId);
+
+    const employee =
+      dto.employeeId !== undefined
+        ? await this.checkEmployee(dto.employeeId, companyId)
+        : await this.checkEmployee(existing.employeeId, companyId);
+
+    const fromDate = dto.fromDate ? new Date(dto.fromDate) : existing.fromDate;
+    const toDate = dto.toDate ? new Date(dto.toDate) : existing.toDate;
+    if (toDate < fromDate) {
+      throw new BadRequestException('End date must be after start date');
+    }
+
+    if (branchId && employee.branchId && employee.branchId !== branchId) {
+      throw new ConflictException('Employee is not in the selected branch');
+    }
+
+    let days = existing.days;
+    if (dto.days !== undefined) {
+      days = this.getDays(dto.days, fromDate, toDate);
+    } else if (dto.fromDate || dto.toDate) {
+      days = this.getDays(undefined, fromDate, toDate);
+    }
+
+    const data: LeaveData = {
+      companyId,
+      branchId,
+      employeeId: employee.id,
+      fromDate,
+      toDate,
+      days,
+      updatedById: actor.sub,
+    };
+    if (dto.type !== undefined) {
+      data.type = dto.type;
+    }
+    if (dto.affectsSalary !== undefined) {
+      data.affectsSalary = dto.affectsSalary;
+    }
+    if (dto.reason !== undefined) {
+      data.reason = trimToNull(dto.reason);
+    }
+
+    return this.prisma.employeeLeave.update({ where: { id }, data });
   }
 
   async delete(id: string, actor: AccessTokenPayload) {
-    const employeeLeave = await this.findEmployeeLeaveByIdOrThrow(id);
-    assertWithinScope(actor, employeeLeave);
+    const employeeLeave = await this.getLeaveById(id);
+    checkAccess(actor, employeeLeave);
 
-    await this.prisma.employeeLeave.delete({
-      where: { id },
-    });
+    await this.prisma.employeeLeave.delete({ where: { id } });
 
-    return {
-      success: true as const,
-      id,
-    };
+    return { success: true as const, id };
   }
 
-  private async findEmployeeLeaveByIdOrThrow(id: string) {
+  private async getLeaveById(id: string) {
     const employeeLeave = await this.prisma.employeeLeave.findUnique({
       where: { id },
     });
-
     if (!employeeLeave) {
       throw new NotFoundException('Employee leave not found');
     }
-
     return employeeLeave;
   }
 
-  private assertEmployeeLeaveAccessible(
+  private checkLeaveAccess(
     actor: AccessTokenPayload,
-    employeeLeave: { employeeId: string; companyId: string; branchId: string | null },
+    employeeLeave: {
+      employeeId: string;
+      companyId: string;
+      branchId: string | null;
+    },
   ): void {
     if (actor.role === 'employee') {
       if (employeeLeave.employeeId !== actor.sub) {
@@ -493,23 +519,20 @@ export class EmployeeLeaveService {
       return;
     }
 
-    assertWithinScope(actor, employeeLeave);
+    checkAccess(actor, employeeLeave);
   }
 
-  private async ensureCompanyExists(companyId: string): Promise<string> {
+  private async checkCompany(companyId: string): Promise<void> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { id: true },
     });
-
     if (!company) {
       throw new NotFoundException('Company not found');
     }
-
-    return company.id;
   }
 
-  private async resolveBranchId(
+  private async checkBranch(
     companyId: string,
     branchId?: string | null,
   ): Promise<string | null> {
@@ -521,24 +544,19 @@ export class EmployeeLeaveService {
       where: { id: branchId },
       select: { id: true, companyId: true },
     });
-
     if (!branch) {
       throw new NotFoundException('Branch not found');
     }
-
     if (branch.companyId !== companyId) {
-      throw new ConflictException(
-        'Branch does not belong to the selected company',
-      );
+      throw new ConflictException('Branch is not in this company');
     }
-
     return branch.id;
   }
 
-  private async ensureEmployeeBelongsToCompany(
+  private async checkEmployee(
     employeeId: string,
     companyId: string,
-  ) {
+  ): Promise<Employee> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       select: {
@@ -549,17 +567,12 @@ export class EmployeeLeaveService {
         lastName: true,
       },
     });
-
     if (!employee) {
       throw new NotFoundException('Employee not found');
     }
-
     if (employee.companyId !== companyId) {
-      throw new ConflictException(
-        'Employee does not belong to the selected company',
-      );
+      throw new ConflictException('Employee is not in this company');
     }
-
     return employee;
   }
 
@@ -573,17 +586,7 @@ export class EmployeeLeaveService {
     );
   }
 
-  private ensureDateRange(
-    startDate: Date,
-    endDate: Date,
-    message: string,
-  ): void {
-    if (endDate < startDate) {
-      throw new BadRequestException(message);
-    }
-  }
-
-  private resolveDays(
+  private getDays(
     days: number | undefined,
     fromDate: Date,
     toDate: Date,
@@ -599,22 +602,17 @@ export class EmployeeLeaveService {
     );
   }
 
-  private buildDateOverlapFilter(
+  private buildDateFilter(
     dateFrom?: string,
     dateTo?: string,
-  ): Prisma.EmployeeLeaveWhereInput {
-    if (!dateFrom && !dateTo) {
-      return {};
+  ): LeaveDateFilter[] {
+    const filters: LeaveDateFilter[] = [];
+    if (dateTo) {
+      filters.push({ fromDate: { lte: new Date(dateTo) } });
     }
-
-    const fromDate = dateFrom ? new Date(dateFrom) : undefined;
-    const toDate = dateTo ? new Date(dateTo) : undefined;
-
-    return {
-      AND: [
-        ...(toDate ? [{ fromDate: { lte: toDate } }] : []),
-        ...(fromDate ? [{ toDate: { gte: fromDate } }] : []),
-      ],
-    };
+    if (dateFrom) {
+      filters.push({ toDate: { gte: new Date(dateFrom) } });
+    }
+    return filters;
   }
 }

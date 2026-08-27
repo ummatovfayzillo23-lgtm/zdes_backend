@@ -19,14 +19,14 @@ import { CreateAdvanceDto } from './dto/create-advance.dto';
 import { UpdateAdvanceDto } from './dto/update-advance.dto';
 
 @ApiTags('Advances')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('advances')
 export class AdvanceController {
   constructor(private readonly advanceService: AdvanceService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create advance - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateAdvanceDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -35,7 +35,9 @@ export class AdvanceController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get advances - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: AdvanceQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -44,7 +46,9 @@ export class AdvanceController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get advance by id - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -53,7 +57,9 @@ export class AdvanceController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update advance - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAdvanceDto,
@@ -63,7 +69,9 @@ export class AdvanceController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete advance - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

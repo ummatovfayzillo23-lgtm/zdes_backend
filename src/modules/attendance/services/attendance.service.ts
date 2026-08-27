@@ -22,9 +22,9 @@ import type {
   WorkSchedule,
 } from '@prisma/client';
 import { readFile } from 'fs/promises';
-import { PrismaService } from '../../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../../common/config/prisma/prisma.service';
 import {
-  assertFileProvided,
+  getFile,
   buildUploadUrl,
 } from '../../../common/upload/image-upload.util';
 import {
@@ -38,9 +38,9 @@ import {
 } from '../../../common/utils/helpers';
 import { AccessTokenPayload } from '../../auth/interfaces/access-token-payload.interface';
 import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-  resolveScopedCompanyId,
+  checkAccess,
+  getScope,
+  getCompanyId,
 } from '../../../common/utils/scope.util';
 import { NotificationService } from '../../notification/notification.service';
 import { notificationTemplates } from '../../notification/notification.templates';
@@ -78,6 +78,33 @@ type AttendanceMetrics = {
   status: AttendanceStatus;
 };
 
+type DateRange = { gte?: Date; lte?: Date };
+
+type TextSearch = { contains: string; mode: 'insensitive' };
+
+type SessionFilter = {
+  employeeId: string;
+  date?: DateRange;
+};
+
+type AttendanceFilter = {
+  companyId?: string;
+  branchId?: string;
+  employeeId?: string;
+  terminalId?: string;
+  status?: AttendanceStatus;
+  date?: DateRange;
+  employee?: {
+    OR: {
+      firstName?: TextSearch;
+      lastName?: TextSearch;
+      login?: TextSearch;
+      phone?: TextSearch;
+      employeeNo?: TextSearch;
+    }[];
+  };
+};
+
 @Injectable()
 export class AttendanceService {
   private readonly reminderLogger = new Logger('AttendanceReminder');
@@ -108,7 +135,7 @@ export class AttendanceService {
           ...employee,
           workSchedule:
             employee.workSchedule ??
-            (await this.findDefaultWorkSchedule(employee.companyId as string)),
+            (await this.getDefaultWorkSchedule(employee.companyId as string)),
           timezone: employee.company?.timezone ?? DEFAULT_TIMEZONE,
         });
       } catch (error) {
@@ -216,11 +243,6 @@ export class AttendanceService {
     return leave !== null;
   }
 
-  /**
-   * Approved hourly leave (max 3h) covering the start of the shift on `date`
-   * shifts the "you must be here by" line forward — lateness is only counted
-   * for minutes beyond the approved window.
-   */
   private async getApprovedLeaveHours(
     employeeId: string,
     date: Date,
@@ -274,7 +296,7 @@ export class AttendanceService {
     companyId: string,
     actor: AccessTokenPayload,
   ): Promise<AttendanceKpiTemplateDto> {
-    assertWithinScope(actor, { companyId });
+    checkAccess(actor, { companyId });
     return this.getKpiTemplateOrDefault(companyId);
   }
 
@@ -282,10 +304,10 @@ export class AttendanceService {
     dto: AttendanceKpiTemplateDto,
     actor: AccessTokenPayload,
   ): Promise<AttendanceKpiTemplateDto> {
-    const companyId = resolveScopedCompanyId(actor, dto.companyId);
-    await this.ensureCompanyExists(companyId);
+    const companyId = getCompanyId(actor, dto.companyId);
+    await this.checkCompany(companyId);
 
-    const template = this.normalizeKpiTemplate(dto);
+    const template = this.buildKpiTemplate(dto);
 
     await this.prisma.setting.upsert({
       where: {
@@ -315,14 +337,14 @@ export class AttendanceService {
     file: Express.Multer.File,
     actor: AccessTokenPayload,
   ) {
-    const uploadedFile = assertFileProvided(file);
+    const uploadedFile = getFile(file);
     const eventTime = this.parseEventTime(dto.eventTime);
-    const employee = await this.findEmployeeOrThrow(dto.employeeId);
-    assertWithinScope(actor, employee);
+    const employee = await this.getEmployee(dto.employeeId);
+    checkAccess(actor, employee);
     const template = await this.getKpiTemplateOrDefault(
       employee.companyId as string,
     );
-    const terminalId = await this.ensureTerminalBelongsToCompany(
+    const terminalId = await this.checkTerminal(
       dto.terminalId,
       employee.companyId as string,
     );
@@ -426,14 +448,14 @@ export class AttendanceService {
     file: Express.Multer.File,
     actor: AccessTokenPayload,
   ) {
-    const uploadedFile = assertFileProvided(file);
+    const uploadedFile = getFile(file);
     const eventTime = this.parseEventTime(dto.eventTime);
-    const employee = await this.findEmployeeOrThrow(dto.employeeId);
-    assertWithinScope(actor, employee);
+    const employee = await this.getEmployee(dto.employeeId);
+    checkAccess(actor, employee);
     const template = await this.getKpiTemplateOrDefault(
       employee.companyId as string,
     );
-    const terminalId = await this.ensureTerminalBelongsToCompany(
+    const terminalId = await this.checkTerminal(
       dto.terminalId,
       employee.companyId as string,
     );
@@ -510,20 +532,13 @@ export class AttendanceService {
     return this.toResponse(result.attendance, result.adjustments, similarity);
   }
 
-  /**
-   * Employee self-service check-in from the app (selfie, no terminal/operator
-   * involved). Unlike checkIn(), multiple sessions per day are allowed — each
-   * call creates a new AttendanceSession row, and the day's Attendance row is
-   * kept as the first-in/last-out summary (same collapse rule the turnstile
-   * ingestion uses) so payroll/KPI keep working unchanged.
-   */
   async selfCheckIn(
     dto: SelfAttendanceCheckInDto,
     file: Express.Multer.File,
     actor: AccessTokenPayload,
   ) {
-    const uploadedFile = assertFileProvided(file);
-    const employee = await this.findEmployeeOrThrow(actor.sub);
+    const uploadedFile = getFile(file);
+    const employee = await this.getEmployee(actor.sub);
     const template = await this.getKpiTemplateOrDefault(
       employee.companyId as string,
     );
@@ -651,18 +666,13 @@ export class AttendanceService {
     return this.toSessionResponse(result.session);
   }
 
-  /**
-   * Employee self-service check-out from the app. Closes the employee's
-   * currently open AttendanceSession and extends the day's Attendance
-   * checkOut to the latest event, same as selfCheckIn().
-   */
   async selfCheckOut(
     dto: SelfAttendanceCheckOutDto,
     file: Express.Multer.File,
     actor: AccessTokenPayload,
   ) {
-    const uploadedFile = assertFileProvided(file);
-    const employee = await this.findEmployeeOrThrow(actor.sub);
+    const uploadedFile = getFile(file);
+    const employee = await this.getEmployee(actor.sub);
     const template = await this.getKpiTemplateOrDefault(
       employee.companyId as string,
     );
@@ -699,7 +709,9 @@ export class AttendanceService {
     });
 
     if (!existingAttendance) {
-      throw new NotFoundException('Attendance record not found for this session');
+      throw new NotFoundException(
+        'Attendance record not found for this session',
+      );
     }
 
     const approvedLeaveHours = await this.getApprovedLeaveHours(
@@ -776,17 +788,16 @@ export class AttendanceService {
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.AttendanceSessionWhereInput = {
-      employeeId: actor.sub,
-      ...(query.dateFrom || query.dateTo
-        ? {
-            date: {
-              ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
-              ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
-            },
-          }
-        : {}),
-    };
+    const where: SessionFilter = { employeeId: actor.sub };
+    if (query.dateFrom || query.dateTo) {
+      where.date = {};
+      if (query.dateFrom) {
+        where.date.gte = new Date(query.dateFrom);
+      }
+      if (query.dateTo) {
+        where.date.lte = new Date(query.dateTo);
+      }
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.attendanceSession.findMany({
@@ -811,34 +822,45 @@ export class AttendanceService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const scope = resolveCompanyBranchScope(actor, {
+    const scope = getScope(actor, {
       companyId: query.companyId,
       branchId: query.branchId,
     });
 
-    const search = trimToNull(query.search);
+    const where: AttendanceFilter = {};
+    if (scope.companyId) {
+      where.companyId = scope.companyId;
+    }
+    if (scope.branchId) {
+      where.branchId = scope.branchId;
+    }
+    if (query.employeeId) {
+      where.employeeId = query.employeeId;
+    }
+    if (query.terminalId) {
+      where.terminalId = query.terminalId;
+    }
+    if (query.status) {
+      where.status = query.status;
+    }
 
-    const where: Prisma.AttendanceWhereInput = {
-      ...(scope.companyId ? { companyId: scope.companyId } : {}),
-      ...(scope.branchId ? { branchId: scope.branchId } : {}),
-      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
-      ...(query.terminalId ? { terminalId: query.terminalId } : {}),
-      ...(query.status ? { status: query.status } : {}),
-      ...this.buildDateRangeFilter(query.dateFrom, query.dateTo),
-      ...(search
-        ? {
-            employee: {
-              OR: [
-                { firstName: { contains: search, mode: 'insensitive' } },
-                { lastName: { contains: search, mode: 'insensitive' } },
-                { login: { contains: search, mode: 'insensitive' } },
-                { phone: { contains: search, mode: 'insensitive' } },
-                { employeeNo: { contains: search, mode: 'insensitive' } },
-              ],
-            },
-          }
-        : {}),
-    };
+    const dateFilter = this.buildDateFilter(query.dateFrom, query.dateTo);
+    if (dateFilter) {
+      where.date = dateFilter;
+    }
+
+    const search = trimToNull(query.search);
+    if (search) {
+      where.employee = {
+        OR: [
+          { firstName: { contains: search, mode: 'insensitive' } },
+          { lastName: { contains: search, mode: 'insensitive' } },
+          { login: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+          { employeeNo: { contains: search, mode: 'insensitive' } },
+        ],
+      };
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.attendance.findMany({
@@ -903,7 +925,7 @@ export class AttendanceService {
       throw new NotFoundException('Attendance not found');
     }
 
-    assertWithinScope(actor, attendance);
+    checkAccess(actor, attendance);
 
     return this.toResponse(
       attendance,
@@ -913,13 +935,6 @@ export class AttendanceService {
     );
   }
 
-  /**
-   * Verifies the uploaded selfie (saved to disk by multer under
-   * uploads/attendance/) against the employee's reference face image via AWS
-   * Rekognition, then returns the local URL to persist on
-   * Attendance/AttendanceSession. No S3 involved — Rekognition only reads the
-   * file bytes for comparison, it never stores them.
-   */
   private async verifyAndUploadAttendanceImage(input: {
     employee: UserWithSchedule;
     file: Express.Multer.File;
@@ -966,7 +981,7 @@ export class AttendanceService {
         lateMinutes: 0,
         earlyLeaveMinutes: 0,
         overtimeMinutes: 0,
-        status: this.resolveAttendanceStatus(0, 0, checkIn, checkOut),
+        status: this.getAttendanceStatus(0, 0, checkIn, checkOut),
       };
     }
 
@@ -980,7 +995,7 @@ export class AttendanceService {
         lateMinutes: 0,
         earlyLeaveMinutes: 0,
         overtimeMinutes: 0,
-        status: this.resolveAttendanceStatus(0, 0, checkIn, checkOut),
+        status: this.getAttendanceStatus(0, 0, checkIn, checkOut),
       };
     }
 
@@ -995,8 +1010,6 @@ export class AttendanceService {
       timezone,
     );
     const graceMinutes = workSchedule.graceMinutes ?? 0;
-    // Approved hourly leave at the start of the shift pushes the
-    // "must be here by" line forward — lateness only counts beyond it.
     const effectiveStart = new Date(
       scheduledStart.getTime() + approvedLeaveHours * 60 * 60 * 1000,
     );
@@ -1023,7 +1036,7 @@ export class AttendanceService {
       lateMinutes,
       earlyLeaveMinutes,
       overtimeMinutes,
-      status: this.resolveAttendanceStatus(
+      status: this.getAttendanceStatus(
         lateMinutes,
         earlyLeaveMinutes,
         checkIn,
@@ -1032,7 +1045,7 @@ export class AttendanceService {
     };
   }
 
-  private resolveAttendanceStatus(
+  private getAttendanceStatus(
     lateMinutes: number,
     earlyLeaveMinutes: number,
     checkIn: Date | null,
@@ -1201,11 +1214,6 @@ export class AttendanceService {
     };
   }
 
-  /**
-   * First-in/last-out collapse rule for a day's Attendance summary when it's
-   * fed by discrete session events (mirrors TurnstileService's
-   * getNextAttendanceTimes, applied here to the mobile self-check-in path).
-   */
   private collapseAttendanceTimes(
     attendance: Attendance | null,
     eventType: 'check_in' | 'check_out',
@@ -1254,9 +1262,7 @@ export class AttendanceService {
     };
   }
 
-  private async findEmployeeOrThrow(
-    employeeId: string,
-  ): Promise<UserWithSchedule> {
+  private async getEmployee(employeeId: string): Promise<UserWithSchedule> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       include: {
@@ -1279,7 +1285,7 @@ export class AttendanceService {
 
     const workSchedule =
       employee.workSchedule ??
-      (await this.findDefaultWorkSchedule(employee.companyId));
+      (await this.getDefaultWorkSchedule(employee.companyId));
 
     return {
       ...employee,
@@ -1288,7 +1294,7 @@ export class AttendanceService {
     };
   }
 
-  private async findDefaultWorkSchedule(
+  private async getDefaultWorkSchedule(
     companyId: string,
   ): Promise<WorkSchedule | null> {
     const link = await this.prisma.workScheduleCompany.findFirst({
@@ -1298,7 +1304,7 @@ export class AttendanceService {
     return link?.workSchedule ?? null;
   }
 
-  private async ensureTerminalBelongsToCompany(
+  private async checkTerminal(
     terminalId: string | undefined,
     companyId: string,
   ): Promise<string | null> {
@@ -1324,7 +1330,7 @@ export class AttendanceService {
     return terminal.id;
   }
 
-  private async ensureCompanyExists(companyId: string): Promise<void> {
+  private async checkCompany(companyId: string): Promise<void> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { id: true },
@@ -1338,7 +1344,7 @@ export class AttendanceService {
   private async getKpiTemplateOrDefault(
     companyId: string,
   ): Promise<AttendanceKpiTemplate> {
-    await this.ensureCompanyExists(companyId);
+    await this.checkCompany(companyId);
 
     const setting = await this.prisma.setting.findUnique({
       where: {
@@ -1377,7 +1383,7 @@ export class AttendanceService {
     };
   }
 
-  private normalizeKpiTemplate(
+  private buildKpiTemplate(
     dto: AttendanceKpiTemplateDto,
   ): Omit<AttendanceKpiTemplate, 'companyId'> {
     return {
@@ -1424,20 +1430,22 @@ export class AttendanceService {
     return value.filter((item): item is number => typeof item === 'number');
   }
 
-  private buildDateRangeFilter(
+  private buildDateFilter(
     dateFrom?: string,
     dateTo?: string,
-  ): Prisma.AttendanceWhereInput {
+  ): DateRange | undefined {
     if (!dateFrom && !dateTo) {
-      return {};
+      return undefined;
     }
 
-    return {
-      date: {
-        ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-        ...(dateTo ? { lte: new Date(dateTo) } : {}),
-      },
-    };
+    const range: DateRange = {};
+    if (dateFrom) {
+      range.gte = new Date(dateFrom);
+    }
+    if (dateTo) {
+      range.lte = new Date(dateTo);
+    }
+    return range;
   }
 
   private mergeNotes(

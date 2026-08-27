@@ -3,34 +3,49 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
-import {
-  assertFileProvided,
-  buildUploadUrl,
-} from '../../common/upload/image-upload.util';
+import { getFile, buildUploadUrl } from '../../common/upload/image-upload.util';
 import { CompanyQueryDto } from './dto/company-query.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { ToggleCompanyStatusDto } from './dto/toggle-company-status.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+
+type Search = { contains: string; mode: 'insensitive' };
+
+type CompanyFilter = {
+  isActive?: boolean;
+  OR?: { name?: Search; legalName?: Search; phone?: Search; email?: Search }[];
+};
+
+type CompanyData = {
+  name?: string;
+  legalName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  timezone?: string;
+};
 
 @Injectable()
 export class CompanyService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateCompanyDto) {
-    const normalizedName = this.normalizeRequiredName(dto.name);
-    await this.ensureNameIsUnique(normalizedName);
+    const name = trimToNull(dto.name);
+    if (!name) {
+      throw new ConflictException('Name is required');
+    }
+    await this.checkNameUnique(name);
 
     return this.prisma.company.create({
       data: {
-        name: normalizedName,
+        name,
         legalName: trimToNull(dto.legalName),
         phone: trimToNull(dto.phone),
         email: trimToNull(dto.email),
         address: trimToNull(dto.address),
-        ...(dto.timezone ? { timezone: dto.timezone } : {}),
+        timezone: dto.timezone || undefined,
       },
     });
   }
@@ -39,21 +54,21 @@ export class CompanyService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const search = trimToNull(query.search);
 
-    const where: Prisma.CompanyWhereInput = {
-      ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
-      ...(search
-        ? {
-            OR: [
-              { name: { contains: search, mode: 'insensitive' } },
-              { legalName: { contains: search, mode: 'insensitive' } },
-              { phone: { contains: search, mode: 'insensitive' } },
-              { email: { contains: search, mode: 'insensitive' } },
-            ],
-          }
-        : {}),
-    };
+    const where: CompanyFilter = {};
+    if (query.isActive !== undefined) {
+      where.isActive = query.isActive;
+    }
+
+    const search = trimToNull(query.search);
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { legalName: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.company.findMany({
@@ -75,48 +90,53 @@ export class CompanyService {
   }
 
   async findOne(id: string) {
-    return this.findCompanyByIdOrThrow(id);
+    return this.getCompanyById(id);
   }
 
   async update(id: string, dto: UpdateCompanyDto) {
-    await this.findCompanyByIdOrThrow(id);
-    const normalizedName = dto.name
-      ? this.normalizeRequiredName(dto.name)
-      : undefined;
+    await this.getCompanyById(id);
 
-    if (normalizedName) {
-      await this.ensureNameIsUnique(normalizedName, id);
+    const data: CompanyData = {};
+
+    if (dto.name !== undefined) {
+      const name = trimToNull(dto.name);
+      if (!name) {
+        throw new ConflictException('Name is required');
+      }
+      await this.checkNameUnique(name, id);
+      data.name = name;
+    }
+    if (dto.legalName !== undefined) {
+      data.legalName = trimToNull(dto.legalName);
+    }
+    if (dto.phone !== undefined) {
+      data.phone = trimToNull(dto.phone);
+    }
+    if (dto.email !== undefined) {
+      data.email = trimToNull(dto.email);
+    }
+    if (dto.address !== undefined) {
+      data.address = trimToNull(dto.address);
+    }
+    if (dto.timezone !== undefined) {
+      data.timezone = dto.timezone;
     }
 
-    return this.prisma.company.update({
-      where: { id },
-      data: {
-        ...(normalizedName ? { name: normalizedName } : {}),
-        ...(dto.legalName !== undefined
-          ? { legalName: trimToNull(dto.legalName) }
-          : {}),
-        ...(dto.phone !== undefined ? { phone: trimToNull(dto.phone) } : {}),
-        ...(dto.email !== undefined ? { email: trimToNull(dto.email) } : {}),
-        ...(dto.address !== undefined
-          ? { address: trimToNull(dto.address) }
-          : {}),
-        ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
-      },
-    });
+    return this.prisma.company.update({ where: { id }, data });
   }
 
   async updateLogo(id: string, file?: Express.Multer.File) {
-    await this.findCompanyByIdOrThrow(id);
-    const uploadedFile = assertFileProvided(file);
+    await this.getCompanyById(id);
+    const uploaded = getFile(file);
 
     return this.prisma.company.update({
       where: { id },
-      data: { logoUrl: buildUploadUrl('logos', uploadedFile.filename) },
+      data: { logoUrl: buildUploadUrl('logos', uploaded.filename) },
     });
   }
 
   async toggleStatus(id: string, dto: ToggleCompanyStatusDto) {
-    const company = await this.findCompanyByIdOrThrow(id);
+    const company = await this.getCompanyById(id);
     const nextIsActive = dto.isActive ?? !company.isActive;
 
     return this.prisma.company.update({
@@ -129,30 +149,28 @@ export class CompanyService {
   }
 
   async delete(id: string) {
-    await this.findCompanyByIdOrThrow(id);
+    await this.getCompanyById(id);
     await this.prisma.company.delete({ where: { id } });
     return { success: true as const, id };
   }
 
-  private async findCompanyByIdOrThrow(id: string) {
+  private async getCompanyById(id: string) {
     const company = await this.prisma.company.findUnique({ where: { id } });
-    if (!company) throw new NotFoundException('Company not found');
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
     return company;
   }
 
-  private async ensureNameIsUnique(
+  private async checkNameUnique(
     name: string,
     excludedId?: string,
   ): Promise<void> {
     const existing = await this.prisma.company.findFirst({
-      where: { name, ...(excludedId ? { id: { not: excludedId } } : {}) },
+      where: excludedId ? { name, id: { not: excludedId } } : { name },
     });
-    if (existing) throw new ConflictException('Company name already exists');
-  }
-
-  private normalizeRequiredName(name: string): string {
-    const normalized = trimToNull(name);
-    if (!normalized) throw new ConflictException('Company name is required');
-    return normalized;
+    if (existing) {
+      throw new ConflictException('Name already exists');
+    }
   }
 }

@@ -29,16 +29,14 @@ import {
 import { TaskService } from './task.service';
 
 @ApiTags('Tasks')
-@ApiBearerAuth()
 @Controller('tasks')
 export class TaskController {
   constructor(private readonly taskService: TaskService) {}
 
   @Post('self')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'Create quick self task (token-based actor & assignee)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   createSelf(
     @Body() dto: CreateSelfTaskDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -47,10 +45,9 @@ export class TaskController {
   }
 
   @Get('my')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'Get only current user tasks with simple pagination (page, limit)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   findMyTasks(
     @Query() query: MyTasksQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -59,20 +56,17 @@ export class TaskController {
   }
 
   @Post()
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'Create new task - superadmin, admin, manager, employee',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   create(@Body() dto: CreateTaskDto, @CurrentUser() actor: AccessTokenPayload) {
     return this.taskService.create(actor, dto);
   }
 
   @Get()
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary:
-      'Get tasks with filtering, search, and view projections (list, board, calendar, grid)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   findAll(
     @Query() query: TaskQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -80,13 +74,10 @@ export class TaskController {
     return this.taskService.findAll(actor, query);
   }
 
-  // TaskProject endpoints (Declared before /:id routes to avoid route collisions)
   @Post('projects')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary:
-      'Create task project / teamspace folder - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   createProject(
     @Body() dto: CreateTaskProjectDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -95,10 +86,9 @@ export class TaskController {
   }
 
   @Get('projects')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'List task projects - superadmin, admin, manager, employee',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   findAllProjects(
     @Query() query: TaskProjectQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -107,10 +97,9 @@ export class TaskController {
   }
 
   @Get('projects/:id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'Get task project by ID - superadmin, admin, manager, employee',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   findProjectById(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -119,10 +108,9 @@ export class TaskController {
   }
 
   @Patch('projects/:id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary: 'Update task project - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   updateProject(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTaskProjectDto,
@@ -132,10 +120,9 @@ export class TaskController {
   }
 
   @Delete('projects/:id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary: 'Delete task project - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   removeProject(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -143,12 +130,10 @@ export class TaskController {
     return this.taskService.removeProject(actor, id);
   }
 
-  // Reorder endpoint (Declared before /:id route)
   @Patch('reorder')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'Batch update task order positions and statuses (drag-and-drop)',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   reorder(
     @Body() dto: ReorderTasksDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -156,12 +141,10 @@ export class TaskController {
     return this.taskService.reorder(actor, dto);
   }
 
-  // Specific Task item endpoints
   @Get(':id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'Get task details by ID - superadmin, admin, manager, employee',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -170,10 +153,9 @@ export class TaskController {
   }
 
   @Patch(':id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary: 'Update task details - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTaskDto,
@@ -183,11 +165,9 @@ export class TaskController {
   }
 
   @Patch(':id/status')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({
-    summary:
-      'Quick toggle task status - superadmin, admin, manager, assigned employee',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   updateStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTaskStatusDto,
@@ -197,10 +177,9 @@ export class TaskController {
   }
 
   @Patch(':id/assignees')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary: 'Update task assignees - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   updateAssignees(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTaskAssigneesDto,
@@ -210,10 +189,9 @@ export class TaskController {
   }
 
   @Delete(':id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary: 'Delete task - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

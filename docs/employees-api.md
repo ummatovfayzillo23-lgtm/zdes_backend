@@ -31,7 +31,7 @@ A `User` row is both an account (login/password/role) **and** an employee profil
 
 ## Scoping rules — who can see/manage whom
 
-Same shared helpers as every other module (`src/common/utils/scope.util.ts`), applied identically to `findAll` (`resolveCompanyBranchScope`) and to every single-record operation (`assertUserWithinScope`, which wraps `assertWithinScope` and adds one more manager-only rule):
+Same shared helpers as every other module (`src/common/utils/scope.util.ts`), applied identically to `findAll` (`getScope`) and to every single-record operation (`checkUserAccess`, which wraps `checkAccess` and adds one more manager-only rule):
 
 | Role | `companyId` | `branchId` | `role` filter | Extra rule |
 |---|---|---|---|---|

@@ -20,17 +20,14 @@ import { UpdateDepartmentDto } from './dto/update-department.dto';
 import { DepartmentService } from './department.service';
 
 @ApiTags('Departments')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('departments')
 export class DepartmentController {
   constructor(private readonly departmentService: DepartmentService) {}
 
   @Post()
-  @ApiOperation({
-    summary:
-      'Create department - superadmin, admin (own company), manager (own branch)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateDepartmentDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -39,10 +36,9 @@ export class DepartmentController {
   }
 
   @Get()
-  @ApiOperation({
-    summary:
-      'Get departments - superadmin (all), admin (own company), manager (own branch)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: DepartmentQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -51,9 +47,9 @@ export class DepartmentController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Get department by id - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -62,7 +58,9 @@ export class DepartmentController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update department - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDepartmentDto,
@@ -72,9 +70,9 @@ export class DepartmentController {
   }
 
   @Patch(':id/toggle-status')
-  @ApiOperation({
-    summary: 'Toggle department status - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   toggleStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ToggleDepartmentStatusDto,
@@ -84,7 +82,9 @@ export class DepartmentController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete department - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

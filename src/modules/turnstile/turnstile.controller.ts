@@ -1,9 +1,12 @@
+import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
-  ApiBody,
-  ApiOperation,
-  ApiTags,
-} from '@nestjs/swagger';
-import { Body, Controller, Headers, HttpCode, HttpStatus, Post } from '@nestjs/common';
+  Body,
+  Controller,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  Post,
+} from '@nestjs/common';
 import { Public } from '../../common/decorators/public.decorator';
 import { IngestTurnstileLogDto } from './dto/ingest-turnstile-log.dto';
 import { TurnstileService } from './turnstile.service';
@@ -16,7 +19,7 @@ export class TurnstileController {
   @Public()
   @Post('logs')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Ingest log - terminal integration' })
+  @ApiOperation({ summary: 'public' })
   @ApiBody({ type: IngestTurnstileLogDto })
   ingestLog(
     @Body() body: IngestTurnstileLogDto,

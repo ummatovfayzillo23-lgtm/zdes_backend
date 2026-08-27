@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from './congif/config.module';
+import { ConfigModule } from './config/config.module';
 
 @Module({
   imports: [ConfigModule],

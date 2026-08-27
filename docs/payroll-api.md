@@ -34,7 +34,7 @@ Same shared helpers as the rest of the codebase. `Payroll` has **no `branchId` c
 | `admin` | forced to own company; foreign value → `403` | free within own company — can pass `branchId` to narrow to one branch, or omit for company-wide |
 | `manager` | forced to own company | forced to own branch |
 
-- **Create**: `employeeId` must belong to the resolved `companyId` (`409` otherwise) and pass `assertWithinScope` (so a manager can only create payroll for an employee in their own branch).
+- **Create**: `employeeId` must belong to the resolved `companyId` (`409` otherwise) and pass `checkAccess` (so a manager can only create payroll for an employee in their own branch).
 - **List / stats**: filtered by the resolved scope plus any explicit `employeeId`/`month`/`status` filters.
 - **Get one / Update / Delete / Pay**: the record is loaded first, then checked — for superadmin/admin directly against the payroll's own `companyId`; for manager, additionally against the related employee's `branchId` (a separate lookup, since Payroll itself has no branch column).
 

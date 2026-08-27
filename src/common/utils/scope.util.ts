@@ -1,16 +1,19 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import type { AuthUserPayload } from '../../modules/auth/interfaces/auth-user-payload.interface';
 
-export interface CompanyBranchScope {
+export interface Scope {
   companyId?: string;
   branchId?: string;
 }
 
-export function resolveCompanyBranchScope(
-  actor: AuthUserPayload,
-  requested: CompanyBranchScope = {},
-): CompanyBranchScope {
+export function getScope(actor: AuthUserPayload, requested: Scope = {}): Scope {
   if (actor.role === 'superadmin') {
+    if (requested.companyId) {
+      return requested;
+    }
+    if (actor.companyId) {
+      return { companyId: actor.companyId, branchId: requested.branchId };
+    }
     return requested;
   }
 
@@ -37,16 +40,16 @@ export function resolveCompanyBranchScope(
   return { companyId: actor.companyId, branchId: actor.branchId };
 }
 
-export function resolveScopedCompanyId(
+export function getCompanyId(
   actor: AuthUserPayload,
   providedCompanyId?: string,
 ): string {
   if (actor.role === 'superadmin') {
-    if (actor.companyId) {
-      return actor.companyId;
-    }
     if (providedCompanyId) {
       return providedCompanyId;
+    }
+    if (actor.companyId) {
+      return actor.companyId;
     }
     throw new BadRequestException('companyId is required');
   }
@@ -62,7 +65,7 @@ export function resolveScopedCompanyId(
   return actor.companyId;
 }
 
-export function assertWithinScope(
+export function checkAccess(
   actor: AuthUserPayload,
   target: { companyId?: string | null; branchId?: string | null },
 ): void {

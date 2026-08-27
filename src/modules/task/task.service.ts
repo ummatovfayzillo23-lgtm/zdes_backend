@@ -5,12 +5,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, TaskPriority, TaskStatus, TaskType } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
-import {
-  assertWithinScope,
-  resolveScopedCompanyId,
-} from '../../common/utils/scope.util';
+import { TaskPriority, TaskStatus, TaskType } from '@prisma/client';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
+import { checkAccess, getCompanyId } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { NotificationService } from '../notification/notification.service';
 import {
@@ -34,6 +31,60 @@ import type {
   TaskReorderResponse,
   TaskWithRelations,
 } from './interfaces/task.interface';
+
+type Search = { contains: string; mode: 'insensitive' };
+
+type ProjectFilter = {
+  companyId: string;
+  isActive?: boolean;
+  OR?: { name?: Search; description?: Search }[];
+};
+
+type TaskFilter = {
+  companyId: string;
+  projectId?: string;
+  departmentId?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  type?: TaskType;
+  createdById?: string;
+  assignees?: { some: { userId: string } };
+  OR?: (
+    | { title?: Search; description?: Search }
+    | { createdById: string }
+    | { assignees: { some: { userId: string } } }
+  )[];
+  startDate?: { gte: Date };
+  dueDate?: { lte: Date };
+};
+
+type ProjectData = {
+  name?: string;
+  description?: string | null;
+  color?: string | null;
+  icon?: string | null;
+  isActive?: boolean;
+};
+
+type TaskData = {
+  title?: string;
+  description?: string | null;
+  type?: TaskType;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  startDate?: Date | null;
+  dueDate?: Date | null;
+  order?: number;
+  projectId?: string | null;
+  departmentId?: string | null;
+};
+
+const TASK_INCLUDE = {
+  project: true,
+  department: true,
+  createdBy: true,
+  assignees: { include: { user: true } },
+};
 
 @Injectable()
 export class TaskService {
@@ -69,11 +120,8 @@ export class TaskService {
     }
   }
 
-  // ============================================================================
-  // TaskProject CRUD
-  // ============================================================================
   async createProject(actor: AccessTokenPayload, dto: CreateTaskProjectDto) {
-    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    const companyId = getCompanyId(actor, dto.companyId);
     if (!dto.name || dto.name.trim().length === 0) {
       throw new BadRequestException('Project name cannot be empty');
     }
@@ -109,12 +157,9 @@ export class TaskService {
     companyIdQuery?: string,
     query?: TaskProjectQueryDto,
   ) {
-    const companyId = resolveScopedCompanyId(
-      actor,
-      companyIdQuery ?? query?.companyId,
-    );
+    const companyId = getCompanyId(actor, companyIdQuery ?? query?.companyId);
 
-    const where: Prisma.TaskProjectWhereInput = { companyId };
+    const where: ProjectFilter = { companyId };
     if (query?.isActive !== undefined) {
       where.isActive = query.isActive;
     }
@@ -141,7 +186,7 @@ export class TaskService {
     if (!project) {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
-    assertWithinScope(actor, { companyId: project.companyId });
+    checkAccess(actor, { companyId: project.companyId });
     return project;
   }
 
@@ -170,18 +215,24 @@ export class TaskService {
       }
     }
 
-    return this.prisma.taskProject.update({
-      where: { id },
-      data: {
-        ...(dto.name ? { name: dto.name.trim() } : {}),
-        ...(dto.description !== undefined
-          ? { description: dto.description }
-          : {}),
-        ...(dto.color !== undefined ? { color: dto.color } : {}),
-        ...(dto.icon !== undefined ? { icon: dto.icon } : {}),
-        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-      },
-    });
+    const data: ProjectData = {};
+    if (dto.name) {
+      data.name = dto.name.trim();
+    }
+    if (dto.description !== undefined) {
+      data.description = dto.description;
+    }
+    if (dto.color !== undefined) {
+      data.color = dto.color;
+    }
+    if (dto.icon !== undefined) {
+      data.icon = dto.icon;
+    }
+    if (dto.isActive !== undefined) {
+      data.isActive = dto.isActive;
+    }
+
+    return this.prisma.taskProject.update({ where: { id }, data });
   }
 
   async removeProject(
@@ -197,14 +248,11 @@ export class TaskService {
     return { success: true, id };
   }
 
-  // ============================================================================
-  // Task Core CRUD & Projections
-  // ============================================================================
   async create(
     actor: AccessTokenPayload,
     dto: CreateTaskDto,
   ): Promise<TaskWithRelations> {
-    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    const companyId = getCompanyId(actor, dto.companyId);
     this.validateTitle(dto.title);
     this.validateDates(dto.startDate, dto.dueDate);
     this.validateOrder(dto.order);
@@ -252,20 +300,12 @@ export class TaskService {
         order: dto.order ?? 0,
         createdById: actor.sub,
         assignees: uniqueAssigneeIds.length
-          ? {
-              create: uniqueAssigneeIds.map((userId) => ({ userId })),
-            }
+          ? { create: uniqueAssigneeIds.map((userId) => ({ userId })) }
           : undefined,
       },
-      include: {
-        project: true,
-        department: true,
-        createdBy: true,
-        assignees: { include: { user: true } },
-      },
+      include: TASK_INCLUDE,
     });
 
-    // Notify assigned users (excluding self) wrapped in try-catch
     if (this.notificationService && uniqueAssigneeIds.length) {
       for (const userId of uniqueAssigneeIds) {
         if (userId !== actor.sub) {
@@ -278,7 +318,7 @@ export class TaskService {
               { taskId: task.id, type: 'TASK_ASSIGNED' },
             );
           } catch {
-            // Non-blocking notification error
+            /* notification failures are non-blocking */
           }
         }
       }
@@ -287,17 +327,14 @@ export class TaskService {
     return task;
   }
 
-  // ============================================================================
-  // Self-task: foydalanuvchi o'zi uchun task yaratadi va o'zi boshqaradi
-  // ============================================================================
   async createSelf(
     actor: AccessTokenPayload,
     dto: CreateSelfTaskDto,
   ): Promise<TaskWithRelations> {
-    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    const companyId = getCompanyId(actor, dto.companyId);
     this.validateTitle(dto.title);
 
-    const task = await this.prisma.task.create({
+    return this.prisma.task.create({
       data: {
         companyId,
         title: dto.title.trim(),
@@ -306,32 +343,20 @@ export class TaskService {
         status: TaskStatus.not_started,
         priority: TaskPriority.normal,
         createdById: actor.sub,
-        assignees: {
-          create: [{ userId: actor.sub }],
-        },
+        assignees: { create: [{ userId: actor.sub }] },
       },
-      include: {
-        project: true,
-        department: true,
-        createdBy: true,
-        assignees: { include: { user: true } },
-      },
+      include: TASK_INCLUDE,
     });
-
-    return task;
   }
 
-  async findMyTasks(
-    actor: AccessTokenPayload,
-    query: MyTasksQueryDto,
-  ): Promise<{ items: TaskWithRelations[]; total: number; page: number; limit: number; totalPages: number }> {
-    const companyId = resolveScopedCompanyId(actor, query.companyId);
+  async findMyTasks(actor: AccessTokenPayload, query: MyTasksQueryDto) {
+    const companyId = getCompanyId(actor, query.companyId);
 
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.TaskWhereInput = {
+    const where: TaskFilter = {
       companyId,
       OR: [
         { createdById: actor.sub },
@@ -345,12 +370,7 @@ export class TaskService {
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: {
-          project: true,
-          department: true,
-          createdBy: true,
-          assignees: { include: { user: true } },
-        },
+        include: TASK_INCLUDE,
       }),
       this.prisma.task.count({ where }),
     ]);
@@ -370,17 +390,12 @@ export class TaskService {
   ): Promise<TaskWithRelations> {
     const task = await this.prisma.task.findUnique({
       where: { id },
-      include: {
-        project: true,
-        department: true,
-        createdBy: true,
-        assignees: { include: { user: true } },
-      },
+      include: TASK_INCLUDE,
     });
     if (!task) {
       throw new NotFoundException(`Task with ID ${id} not found`);
     }
-    assertWithinScope(actor, { companyId: task.companyId });
+    checkAccess(actor, { companyId: task.companyId });
     return task;
   }
 
@@ -388,7 +403,7 @@ export class TaskService {
     actor: AccessTokenPayload,
     query: TaskQueryDto = {},
   ): Promise<TaskListResponse | TaskBoardResponse | TaskCalendarResponse> {
-    const companyId = resolveScopedCompanyId(actor, query.companyId);
+    const companyId = getCompanyId(actor, query.companyId);
     const viewMode = query.viewMode ?? query.view ?? 'list';
 
     if (query.page !== undefined && query.page < 1) {
@@ -398,13 +413,25 @@ export class TaskService {
       throw new BadRequestException('limit must be between 1 and 100');
     }
 
-    const where: Prisma.TaskWhereInput = { companyId };
-    if (query.projectId) where.projectId = query.projectId;
-    if (query.departmentId) where.departmentId = query.departmentId;
-    if (query.status) where.status = query.status;
-    if (query.priority) where.priority = query.priority;
-    if (query.type) where.type = query.type;
-    if (query.createdById) where.createdById = query.createdById;
+    const where: TaskFilter = { companyId };
+    if (query.projectId) {
+      where.projectId = query.projectId;
+    }
+    if (query.departmentId) {
+      where.departmentId = query.departmentId;
+    }
+    if (query.status) {
+      where.status = query.status;
+    }
+    if (query.priority) {
+      where.priority = query.priority;
+    }
+    if (query.type) {
+      where.type = query.type;
+    }
+    if (query.createdById) {
+      where.createdById = query.createdById;
+    }
     if (query.assigneeId) {
       where.assignees = { some: { userId: query.assigneeId } };
     }
@@ -417,23 +444,24 @@ export class TaskService {
         ];
       }
     }
-    if (query.startDate) where.startDate = { gte: new Date(query.startDate) };
-    if (query.dueDate) where.dueDate = { lte: new Date(query.dueDate) };
+    if (query.startDate) {
+      where.startDate = { gte: new Date(query.startDate) };
+    }
+    if (query.dueDate) {
+      where.dueDate = { lte: new Date(query.dueDate) };
+    }
 
-    // Projections based on viewMode
     if (viewMode === 'board') {
-      const allTasks = await this.prisma.task.findMany({
+      const allTasks = (await this.prisma.task.findMany({
         where,
         orderBy: [{ status: 'asc' }, { order: 'asc' }, { createdAt: 'desc' }],
-        include: {
-          project: true,
-          department: true,
-          createdBy: true,
-          assignees: { include: { user: true } },
-        },
-      });
+        include: TASK_INCLUDE,
+      })) as TaskWithRelations[];
 
-      const board: Record<TaskStatus, { count: number; items: any[] }> = {
+      const board: Record<
+        TaskStatus,
+        { count: number; items: TaskWithRelations[] }
+      > = {
         [TaskStatus.not_started]: { count: 0, items: [] },
         [TaskStatus.in_progress]: { count: 0, items: [] },
         [TaskStatus.in_review]: { count: 0, items: [] },
@@ -455,26 +483,19 @@ export class TaskService {
       const tasks = await this.prisma.task.findMany({
         where,
         orderBy: { dueDate: 'asc' },
-        include: {
-          project: true,
-          department: true,
-          createdBy: true,
-          assignees: { include: { user: true } },
-        },
+        include: TASK_INCLUDE,
       });
       return { items: tasks, total: tasks.length };
     }
 
-    // Default: list (or grid) view with pagination
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
 
-    const orderBy: Prisma.TaskOrderByWithRelationInput = query.sortBy
-      ? {
-          [query.sortBy]: query.sortOrder ?? 'asc',
-        }
-      : { createdAt: 'desc' };
+    let orderBy: Record<string, 'asc' | 'desc'> = { createdAt: 'desc' };
+    if (query.sortBy) {
+      orderBy = { [query.sortBy]: query.sortOrder ?? 'asc' };
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.task.findMany({
@@ -482,12 +503,7 @@ export class TaskService {
         skip,
         take: limit,
         orderBy,
-        include: {
-          project: true,
-          department: true,
-          createdBy: true,
-          assignees: { include: { user: true } },
-        },
+        include: TASK_INCLUDE,
       }),
       this.prisma.task.count({ where }),
     ]);
@@ -513,7 +529,9 @@ export class TaskService {
       );
     }
 
-    if (dto.title !== undefined) this.validateTitle(dto.title);
+    if (dto.title !== undefined) {
+      this.validateTitle(dto.title);
+    }
     if (dto.startDate !== undefined || dto.dueDate !== undefined) {
       const sDate =
         dto.startDate ??
@@ -522,7 +540,9 @@ export class TaskService {
         dto.dueDate ?? (task.dueDate ? task.dueDate.toISOString() : undefined);
       this.validateDates(sDate, dDate);
     }
-    if (dto.order !== undefined) this.validateOrder(dto.order);
+    if (dto.order !== undefined) {
+      this.validateOrder(dto.order);
+    }
 
     if (dto.projectId) {
       const project = await this.prisma.taskProject.findUnique({
@@ -548,34 +568,42 @@ export class TaskService {
       }
     }
 
+    const data: TaskData = {};
+    if (dto.title) {
+      data.title = dto.title.trim();
+    }
+    if (dto.description !== undefined) {
+      data.description = dto.description;
+    }
+    if (dto.type) {
+      data.type = dto.type;
+    }
+    if (dto.status) {
+      data.status = dto.status;
+    }
+    if (dto.priority) {
+      data.priority = dto.priority;
+    }
+    if (dto.startDate !== undefined) {
+      data.startDate = dto.startDate ? new Date(dto.startDate) : null;
+    }
+    if (dto.dueDate !== undefined) {
+      data.dueDate = dto.dueDate ? new Date(dto.dueDate) : null;
+    }
+    if (dto.order !== undefined) {
+      data.order = dto.order;
+    }
+    if (dto.projectId !== undefined) {
+      data.projectId = dto.projectId;
+    }
+    if (dto.departmentId !== undefined) {
+      data.departmentId = dto.departmentId;
+    }
+
     return this.prisma.task.update({
       where: { id },
-      data: {
-        ...(dto.title ? { title: dto.title.trim() } : {}),
-        ...(dto.description !== undefined
-          ? { description: dto.description }
-          : {}),
-        ...(dto.type ? { type: dto.type } : {}),
-        ...(dto.status ? { status: dto.status } : {}),
-        ...(dto.priority ? { priority: dto.priority } : {}),
-        ...(dto.startDate !== undefined
-          ? { startDate: dto.startDate ? new Date(dto.startDate) : null }
-          : {}),
-        ...(dto.dueDate !== undefined
-          ? { dueDate: dto.dueDate ? new Date(dto.dueDate) : null }
-          : {}),
-        ...(dto.order !== undefined ? { order: dto.order } : {}),
-        ...(dto.projectId !== undefined ? { projectId: dto.projectId } : {}),
-        ...(dto.departmentId !== undefined
-          ? { departmentId: dto.departmentId }
-          : {}),
-      },
-      include: {
-        project: true,
-        department: true,
-        createdBy: true,
-        assignees: { include: { user: true } },
-      },
+      data,
+      include: TASK_INCLUDE,
     });
   }
 
@@ -589,7 +617,6 @@ export class TaskService {
       throw new BadRequestException(`Invalid status value "${dto.status}"`);
     }
 
-    // If actor is employee, ensure they are assigned to this task or created it
     if (actor.role === 'employee') {
       const isAssigned = task.assignees?.some((a) => a.userId === actor.sub);
       const isCreator = task.createdById === actor.sub;
@@ -601,12 +628,7 @@ export class TaskService {
     return this.prisma.task.update({
       where: { id },
       data: { status: dto.status },
-      include: {
-        project: true,
-        department: true,
-        createdBy: true,
-        assignees: { include: { user: true } },
-      },
+      include: TASK_INCLUDE,
     });
   }
 
@@ -628,7 +650,6 @@ export class TaskService {
       (uid) => !previousAssigneeIds.includes(uid),
     );
 
-    // Atomic replacement in transaction
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.taskAssignee.deleteMany({ where: { taskId: id } });
       if (uniqueAssigneeIds.length) {
@@ -638,16 +659,10 @@ export class TaskService {
       }
       return tx.task.findUniqueOrThrow({
         where: { id },
-        include: {
-          project: true,
-          department: true,
-          createdBy: true,
-          assignees: { include: { user: true } },
-        },
+        include: TASK_INCLUDE,
       });
     });
 
-    // Notify newly assigned users
     if (this.notificationService && newAssigneeIds.length) {
       for (const userId of newAssigneeIds) {
         if (userId !== actor.sub) {
@@ -660,7 +675,7 @@ export class TaskService {
               { taskId: id, type: 'TASK_ASSIGNED' },
             );
           } catch {
-            // Non-blocking notification error
+            /* notification failures are non-blocking */
           }
         }
       }
@@ -677,7 +692,6 @@ export class TaskService {
       return { success: true, updatedCount: 0 };
     }
 
-    // Verify all tasks exist and belong to actor's company
     for (const item of dto.items) {
       const task = await this.prisma.task.findUnique({
         where: { id: item.id },
@@ -685,20 +699,19 @@ export class TaskService {
       if (!task) {
         throw new NotFoundException(`Task with ID ${item.id} not found`);
       }
-      assertWithinScope(actor, { companyId: task.companyId });
+      checkAccess(actor, { companyId: task.companyId });
     }
 
-    // Execute in transaction
     await this.prisma.$transaction(
-      dto.items.map((item) =>
-        this.prisma.task.update({
-          where: { id: item.id },
-          data: {
-            order: item.order,
-            ...(item.status ? { status: item.status } : {}),
-          },
-        }),
-      ),
+      dto.items.map((item) => {
+        const data: { order: number; status?: TaskStatus } = {
+          order: item.order,
+        };
+        if (item.status) {
+          data.status = item.status;
+        }
+        return this.prisma.task.update({ where: { id: item.id }, data });
+      }),
     );
 
     return { success: true, updatedCount: dto.items.length };

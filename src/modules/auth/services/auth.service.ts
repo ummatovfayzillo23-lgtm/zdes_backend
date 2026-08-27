@@ -4,7 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { User, UserRole } from '@prisma/client';
-import { PrismaService } from '../../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../../common/config/prisma/prisma.service';
 import type { AccessTokenPayload } from '../interfaces/access-token-payload.interface';
 import type { AuthUserPayload } from '../interfaces/auth-user-payload.interface';
 import type { TokenRequestMeta } from '../interfaces/token-request-meta.interface';
@@ -45,11 +45,14 @@ export class AuthService {
       },
     });
 
-    if (!user || !(await this.passwordService.verifyPassword(password, user.passwordHash))) {
+    if (
+      !user ||
+      !(await this.passwordService.verifyPassword(password, user.passwordHash))
+    ) {
       throw new UnauthorizedException('Invalid login or password');
     }
 
-    this.ensureUserCanLogin(user);
+    this.checkUserCanLogin(user);
 
     const refreshToken = this.tokenService.createRefreshToken();
 
@@ -71,10 +74,7 @@ export class AuthService {
     return this.buildAuthTokensResponse(user, refreshToken);
   }
 
-  async refresh(
-    refreshToken: string,
-    meta: TokenRequestMeta,
-  ) {
+  async refresh(refreshToken: string, meta: TokenRequestMeta) {
     const normalizedRefreshToken = trimToNull(refreshToken);
 
     if (!normalizedRefreshToken) {
@@ -104,7 +104,7 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token expired');
     }
 
-    this.ensureUserCanLogin(tokenRecord.user);
+    this.checkUserCanLogin(tokenRecord.user);
 
     await this.prisma.refreshToken.update({
       where: {
@@ -154,7 +154,7 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    this.ensureUserCanLogin(user);
+    this.checkUserCanLogin(user);
 
     return this.toPublicUser(user);
   }
@@ -187,7 +187,7 @@ export class AuthService {
     });
   }
 
-  private ensureUserCanLogin(user: User): void {
+  private checkUserCanLogin(user: User): void {
     if (!LOGIN_ALLOWED_ROLES.includes(user.role)) {
       throw new ForbiddenException('You do not have access to login');
     }
@@ -233,13 +233,12 @@ export class AuthService {
     };
   }
 
-  private buildAuthTokensResponse(  
-    user: User,
-    refreshToken?: string,
-  ) {
+  private buildAuthTokensResponse(user: User, refreshToken?: string) {
     return {
       tokenType: 'Bearer',
-      accessToken: this.tokenService.createAccessToken(this.toAuthPayload(user)),
+      accessToken: this.tokenService.createAccessToken(
+        this.toAuthPayload(user),
+      ),
       refreshToken,
       expiresIn: this.tokenService.getAccessTokenExpiresInSeconds(),
       user: this.toPublicUser(user),

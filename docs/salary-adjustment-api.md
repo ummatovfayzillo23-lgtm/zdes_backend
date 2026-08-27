@@ -20,7 +20,7 @@ Same shared helpers as the rest of the codebase. `SalaryAdjustment` has **no `br
 | `admin` | forced to own company; foreign value → `403` | free within own company — pass `branchId` to narrow to one branch, or omit for company-wide |
 | `manager` | forced to own company | forced to own branch |
 
-- **Create**: `employeeId` must belong to the resolved `companyId` (`409` otherwise) and pass `assertWithinScope`.
+- **Create**: `employeeId` must belong to the resolved `companyId` (`409` otherwise) and pass `checkAccess`.
 - **List / get one / update / delete**: same `assertRecordInScope` pattern as Payroll/Advance — superadmin/admin checked directly against the record's own `companyId`; manager additionally checked against the related employee's `branchId`.
 
 ---

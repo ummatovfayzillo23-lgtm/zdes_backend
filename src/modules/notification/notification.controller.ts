@@ -19,14 +19,14 @@ import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { NotificationService } from './notification.service';
 
 @ApiTags('Notifications')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('notifications')
 export class NotificationController {
   constructor(private readonly notificationService: NotificationService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create notification - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateNotificationDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -35,7 +35,9 @@ export class NotificationController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get notifications - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: NotificationQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -44,9 +46,9 @@ export class NotificationController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Get notification by id - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -55,7 +57,9 @@ export class NotificationController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update notification - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateNotificationDto,
@@ -65,7 +69,9 @@ export class NotificationController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete notification - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

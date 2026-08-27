@@ -1,22 +1,39 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
-import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-} from '../../common/utils/scope.util';
+import { checkAccess, getScope } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateRefreshTokenDto } from './dto/create-refresh-token.dto';
 import { RefreshTokenQueryDto } from './dto/refresh-token-query.dto';
 import { UpdateRefreshTokenDto } from './dto/update-refresh-token.dto';
+
+type Search = { contains: string; mode: 'insensitive' };
+
+type RefreshTokenFilter = {
+  userId?: string;
+  user?: { companyId: string; branchId?: string };
+  deviceType?: string;
+  expiresAt?: { lt: Date } | { gte: Date };
+  OR?: { deviceName?: Search; userAgent?: Search; ipAddress?: Search }[];
+};
+
+type RefreshTokenData = {
+  userId?: string;
+  token?: string;
+  expiresAt?: Date;
+  deviceType?: string | null;
+  deviceName?: string | null;
+  userAgent?: string | null;
+  ipAddress?: string | null;
+  lastUsedAt?: Date | null;
+};
 
 @Injectable()
 export class RefreshTokenService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateRefreshTokenDto, actor: AccessTokenPayload) {
-    const userId = await this.ensureUserInScope(dto.userId, actor);
+    const userId = await this.checkUser(dto.userId, actor);
 
     return this.prisma.refreshToken.create({
       data: {
@@ -36,38 +53,38 @@ export class RefreshTokenService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const search = trimToNull(query.search);
     const now = new Date();
-    const scope = resolveCompanyBranchScope(actor);
 
-    const where: Prisma.RefreshTokenWhereInput = {
-      ...(query.userId ? { userId: query.userId } : {}),
-      ...(scope.companyId
-        ? {
-            user: {
-              companyId: scope.companyId,
-              ...(scope.branchId ? { branchId: scope.branchId } : {}),
-            },
-          }
-        : {}),
-      ...(trimToNull(query.deviceType)
-        ? { deviceType: trimToNull(query.deviceType) }
-        : {}),
-      ...(query.isExpired !== undefined
-        ? {
-            expiresAt: query.isExpired ? { lt: now } : { gte: now },
-          }
-        : {}),
-      ...(search
-        ? {
-            OR: [
-              { deviceName: { contains: search, mode: 'insensitive' } },
-              { userAgent: { contains: search, mode: 'insensitive' } },
-              { ipAddress: { contains: search, mode: 'insensitive' } },
-            ],
-          }
-        : {}),
-    };
+    const scope = getScope(actor);
+
+    const where: RefreshTokenFilter = {};
+    if (query.userId) {
+      where.userId = query.userId;
+    }
+    if (scope.companyId) {
+      where.user = { companyId: scope.companyId };
+      if (scope.branchId) {
+        where.user.branchId = scope.branchId;
+      }
+    }
+
+    const deviceType = trimToNull(query.deviceType);
+    if (deviceType) {
+      where.deviceType = deviceType;
+    }
+
+    if (query.isExpired !== undefined) {
+      where.expiresAt = query.isExpired ? { lt: now } : { gte: now };
+    }
+
+    const search = trimToNull(query.search);
+    if (search) {
+      where.OR = [
+        { deviceName: { contains: search, mode: 'insensitive' } },
+        { userAgent: { contains: search, mode: 'insensitive' } },
+        { ipAddress: { contains: search, mode: 'insensitive' } },
+      ];
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.refreshToken.findMany({
@@ -89,8 +106,8 @@ export class RefreshTokenService {
   }
 
   async findOne(id: string, actor: AccessTokenPayload) {
-    const refreshToken = await this.findRefreshTokenByIdOrThrow(id);
-    await this.assertRefreshTokenInScope(actor, refreshToken);
+    const refreshToken = await this.getRefreshTokenById(id);
+    await this.checkTokenAccess(actor, refreshToken);
     return refreshToken;
   }
 
@@ -99,49 +116,47 @@ export class RefreshTokenService {
     dto: UpdateRefreshTokenDto,
     actor: AccessTokenPayload,
   ) {
-    const existing = await this.findRefreshTokenByIdOrThrow(id);
-    await this.assertRefreshTokenInScope(actor, existing);
+    const existing = await this.getRefreshTokenById(id);
+    await this.checkTokenAccess(actor, existing);
 
-    const userId =
-      dto.userId !== undefined
-        ? await this.ensureUserInScope(dto.userId, actor)
-        : undefined;
+    const data: RefreshTokenData = {};
 
-    return this.prisma.refreshToken.update({
-      where: { id },
-      data: {
-        ...(userId !== undefined ? { userId } : {}),
-        ...(dto.token !== undefined ? { token: dto.token } : {}),
-        ...(dto.expiresAt !== undefined
-          ? { expiresAt: new Date(dto.expiresAt) }
-          : {}),
-        ...(dto.deviceType !== undefined
-          ? { deviceType: trimToNull(dto.deviceType) }
-          : {}),
-        ...(dto.deviceName !== undefined
-          ? { deviceName: trimToNull(dto.deviceName) }
-          : {}),
-        ...(dto.userAgent !== undefined
-          ? { userAgent: trimToNull(dto.userAgent) }
-          : {}),
-        ...(dto.ipAddress !== undefined
-          ? { ipAddress: trimToNull(dto.ipAddress) }
-          : {}),
-        ...(dto.lastUsedAt !== undefined
-          ? { lastUsedAt: dto.lastUsedAt ? new Date(dto.lastUsedAt) : null }
-          : {}),
-      },
-    });
+    if (dto.userId !== undefined) {
+      data.userId = await this.checkUser(dto.userId, actor);
+    }
+    if (dto.token !== undefined) {
+      data.token = dto.token;
+    }
+    if (dto.expiresAt !== undefined) {
+      data.expiresAt = new Date(dto.expiresAt);
+    }
+    if (dto.deviceType !== undefined) {
+      data.deviceType = trimToNull(dto.deviceType);
+    }
+    if (dto.deviceName !== undefined) {
+      data.deviceName = trimToNull(dto.deviceName);
+    }
+    if (dto.userAgent !== undefined) {
+      data.userAgent = trimToNull(dto.userAgent);
+    }
+    if (dto.ipAddress !== undefined) {
+      data.ipAddress = trimToNull(dto.ipAddress);
+    }
+    if (dto.lastUsedAt !== undefined) {
+      data.lastUsedAt = dto.lastUsedAt ? new Date(dto.lastUsedAt) : null;
+    }
+
+    return this.prisma.refreshToken.update({ where: { id }, data });
   }
 
   async delete(id: string, actor: AccessTokenPayload) {
-    const refreshToken = await this.findRefreshTokenByIdOrThrow(id);
-    await this.assertRefreshTokenInScope(actor, refreshToken);
+    const refreshToken = await this.getRefreshTokenById(id);
+    await this.checkTokenAccess(actor, refreshToken);
     await this.prisma.refreshToken.delete({ where: { id } });
     return { success: true as const, id };
   }
 
-  private async findRefreshTokenByIdOrThrow(id: string) {
+  private async getRefreshTokenById(id: string) {
     const refreshToken = await this.prisma.refreshToken.findUnique({
       where: { id },
     });
@@ -151,7 +166,7 @@ export class RefreshTokenService {
     return refreshToken;
   }
 
-  private async assertRefreshTokenInScope(
+  private async checkTokenAccess(
     actor: AccessTokenPayload,
     refreshToken: { userId: string },
   ): Promise<void> {
@@ -163,10 +178,10 @@ export class RefreshTokenService {
       where: { id: refreshToken.userId },
       select: { companyId: true, branchId: true },
     });
-    assertWithinScope(actor, user ?? { companyId: null, branchId: null });
+    checkAccess(actor, user ?? { companyId: null, branchId: null });
   }
 
-  private async ensureUserInScope(
+  private async checkUser(
     userId: string,
     actor: AccessTokenPayload,
   ): Promise<string> {
@@ -177,7 +192,7 @@ export class RefreshTokenService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    assertWithinScope(actor, user);
+    checkAccess(actor, user);
     return user.id;
   }
 }

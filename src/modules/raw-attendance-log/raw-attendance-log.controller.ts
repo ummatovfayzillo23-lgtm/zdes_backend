@@ -19,8 +19,6 @@ import { UpdateRawAttendanceLogDto } from './dto/update-raw-attendance-log.dto';
 import { RawAttendanceLogService } from './raw-attendance-log.service';
 
 @ApiTags('Raw Attendance Logs')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('raw-attendance-logs')
 export class RawAttendanceLogController {
   constructor(
@@ -28,9 +26,9 @@ export class RawAttendanceLogController {
   ) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Create raw attendance log - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateRawAttendanceLogDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -39,9 +37,9 @@ export class RawAttendanceLogController {
   }
 
   @Get()
-  @ApiOperation({
-    summary: 'Get raw attendance logs - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: RawAttendanceLogQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -50,9 +48,9 @@ export class RawAttendanceLogController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Get raw attendance log by id - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -61,9 +59,9 @@ export class RawAttendanceLogController {
   }
 
   @Patch(':id')
-  @ApiOperation({
-    summary: 'Update raw attendance log - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateRawAttendanceLogDto,
@@ -73,9 +71,9 @@ export class RawAttendanceLogController {
   }
 
   @Delete(':id')
-  @ApiOperation({
-    summary: 'Delete raw attendance log - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

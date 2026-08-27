@@ -7,8 +7,8 @@ import {
 } from '@nestjs/common';
 import { TaskPriority, TaskStatus, TaskType } from '@prisma/client';
 import {
-  resolveScopedCompanyId,
-  assertWithinScope,
+  getCompanyId,
+  checkAccess,
 } from '../../../common/utils/scope.util';
 import type { AuthUserPayload } from '../../auth/interfaces/auth-user-payload.interface';
 
@@ -118,7 +118,7 @@ export class TaskServiceContract {
 
   // --- TaskProject CRUD ---
   async createProject(actor: AuthUserPayload, dto: CreateTaskProjectDto) {
-    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    const companyId = getCompanyId(actor, dto.companyId);
     if (!dto.name || dto.name.trim().length === 0) {
       throw new BadRequestException('Project name cannot be empty');
     }
@@ -150,7 +150,7 @@ export class TaskServiceContract {
   }
 
   async findAllProjects(actor: AuthUserPayload, companyIdQuery?: string) {
-    const companyId = resolveScopedCompanyId(actor, companyIdQuery);
+    const companyId = getCompanyId(actor, companyIdQuery);
     return await this.prisma.taskProject.findMany({
       where: { companyId },
       orderBy: { createdAt: 'desc' },
@@ -164,7 +164,7 @@ export class TaskServiceContract {
     if (!project) {
       throw new NotFoundException(`Project with ID ${id} not found`);
     }
-    assertWithinScope(actor, { companyId: project.companyId });
+    checkAccess(actor, { companyId: project.companyId });
     return project;
   }
 
@@ -220,7 +220,7 @@ export class TaskServiceContract {
 
   // --- Task CRUD ---
   async create(actor: AuthUserPayload, dto: CreateTaskDto) {
-    const companyId = resolveScopedCompanyId(actor, dto.companyId);
+    const companyId = getCompanyId(actor, dto.companyId);
     this.validateTitle(dto.title);
     this.validateDates(dto.startDate, dto.dueDate);
     this.validateOrder(dto.order);
@@ -290,12 +290,12 @@ export class TaskServiceContract {
     if (!task) {
       throw new NotFoundException(`Task with ID ${id} not found`);
     }
-    assertWithinScope(actor, { companyId: task.companyId });
+    checkAccess(actor, { companyId: task.companyId });
     return task;
   }
 
   async findAll(actor: AuthUserPayload, query: TaskQueryDto = {}) {
-    const companyId = resolveScopedCompanyId(actor, query.companyId);
+    const companyId = getCompanyId(actor, query.companyId);
     const viewMode = query.viewMode ?? 'list';
 
     if (query.page !== undefined && query.page < 1) {
@@ -560,7 +560,7 @@ export class TaskServiceContract {
       if (!task) {
         throw new NotFoundException(`Task with ID ${item.id} not found`);
       }
-      assertWithinScope(actor, { companyId: task.companyId });
+      checkAccess(actor, { companyId: task.companyId });
     }
 
     // Execute in transaction

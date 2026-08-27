@@ -19,16 +19,14 @@ import { UpdateRefreshTokenDto } from './dto/update-refresh-token.dto';
 import { RefreshTokenService } from './refresh-token.service';
 
 @ApiTags('Refresh Tokens')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('refresh-tokens')
 export class RefreshTokenController {
   constructor(private readonly refreshTokenService: RefreshTokenService) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Create refresh token - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateRefreshTokenDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -37,7 +35,9 @@ export class RefreshTokenController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get refresh tokens - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: RefreshTokenQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -46,9 +46,9 @@ export class RefreshTokenController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Get refresh token by id - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -57,9 +57,9 @@ export class RefreshTokenController {
   }
 
   @Patch(':id')
-  @ApiOperation({
-    summary: 'Update refresh token - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateRefreshTokenDto,
@@ -69,9 +69,9 @@ export class RefreshTokenController {
   }
 
   @Delete(':id')
-  @ApiOperation({
-    summary: 'Delete refresh token - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

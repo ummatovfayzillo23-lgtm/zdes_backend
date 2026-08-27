@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { AttendanceSource, AttendanceStatus } from '@prisma/client';
-import { PrismaService } from '../../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../../common/config/prisma/prisma.service';
 import {
   DEFAULT_TIMEZONE,
   getMonthKey,

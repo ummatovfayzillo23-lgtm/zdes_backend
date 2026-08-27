@@ -22,16 +22,14 @@ import { WorkScheduleQueryDto } from './dto/work-schedule-query.dto';
 import { WorkScheduleService } from './work-schedule.service';
 
 @ApiTags('Work Schedules')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin')
 @Controller('work-schedules')
 export class WorkScheduleController {
   constructor(private readonly workScheduleService: WorkScheduleService) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Create work schedule - superadmin, admin (own company)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   create(
     @Body() dto: CreateWorkScheduleDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -40,10 +38,9 @@ export class WorkScheduleController {
   }
 
   @Get()
-  @ApiOperation({
-    summary:
-      'Get work schedules - superadmin (all), admin (schedules attached to own company)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   findAll(
     @Query() query: WorkScheduleQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -52,10 +49,9 @@ export class WorkScheduleController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary:
-      'Get work schedule by id, including every company it is attached to - superadmin, admin',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -64,9 +60,9 @@ export class WorkScheduleController {
   }
 
   @Patch(':id')
-  @ApiOperation({
-    summary: 'Update work schedule - superadmin, admin (owning company only)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateWorkScheduleDto,
@@ -76,10 +72,9 @@ export class WorkScheduleController {
   }
 
   @Patch(':id/toggle-status')
-  @ApiOperation({
-    summary:
-      'Toggle work schedule status - superadmin, admin (owning company only)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   toggleStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ToggleWorkScheduleStatusDto,
@@ -89,11 +84,9 @@ export class WorkScheduleController {
   }
 
   @Post(':id/companies')
+  @ApiBearerAuth()
   @Roles('superadmin')
-  @ApiOperation({
-    summary:
-      'Attach an existing work schedule to another company for reuse - superadmin only',
-  })
+  @ApiOperation({ summary: 'superadmin' })
   attachCompany(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AttachCompanyDto,
@@ -103,10 +96,9 @@ export class WorkScheduleController {
   }
 
   @Delete(':id/companies/:companyId')
-  @ApiOperation({
-    summary:
-      'Detach a work schedule from a company (not the owning company) - superadmin, admin (own company)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   detachCompany(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('companyId', ParseUUIDPipe) companyId: string,
@@ -116,10 +108,9 @@ export class WorkScheduleController {
   }
 
   @Patch(':id/companies/:companyId/set-default')
-  @ApiOperation({
-    summary:
-      'Set work schedule as the default for a specific company - superadmin, admin (own company)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   setDefaultForCompany(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('companyId', ParseUUIDPipe) companyId: string,
@@ -129,9 +120,9 @@ export class WorkScheduleController {
   }
 
   @Patch(':id/assign-user')
-  @ApiOperation({
-    summary: 'Assign work schedule to a user - superadmin, admin',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   assignUser(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignUserDto,
@@ -141,9 +132,9 @@ export class WorkScheduleController {
   }
 
   @Patch(':id/unassign-user')
-  @ApiOperation({
-    summary: 'Remove work schedule from a user - superadmin, admin',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   unassignUser(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignUserDto,
@@ -153,9 +144,9 @@ export class WorkScheduleController {
   }
 
   @Delete(':id')
-  @ApiOperation({
-    summary: 'Delete work schedule - superadmin, admin (owning company only)',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin')
+  @ApiOperation({ summary: 'superadmin, admin' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

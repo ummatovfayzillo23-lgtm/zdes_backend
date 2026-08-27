@@ -3,41 +3,64 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import type { Prisma, TerminalEventType } from '@prisma/client';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { trimToNull } from '../../common/utils/helpers';
 import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-  resolveScopedCompanyId,
+  checkAccess,
+  getScope,
+  getCompanyId,
 } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateRawAttendanceLogDto } from './dto/create-raw-attendance-log.dto';
 import { RawAttendanceLogQueryDto } from './dto/raw-attendance-log-query.dto';
 import { UpdateRawAttendanceLogDto } from './dto/update-raw-attendance-log.dto';
 
+type RawLogFilter = {
+  companyId?: string;
+  employee?: { branchId: string };
+  terminalId?: string;
+  employeeId?: string;
+  attendanceId?: string;
+  eventType?: TerminalEventType;
+  processed?: boolean;
+  deviceUserId?: { contains: string; mode: 'insensitive' };
+  eventTime?: { gte?: Date; lte?: Date };
+};
+
+type RawLogData = {
+  companyId?: string;
+  terminalId?: string;
+  employeeId?: string | null;
+  attendanceId?: string | null;
+  deviceUserId?: string;
+  eventTime?: Date;
+  eventType?: TerminalEventType;
+  rawPayload?: Prisma.InputJsonValue;
+  processed?: boolean;
+  error?: string | null;
+};
+
 @Injectable()
 export class RawAttendanceLogService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: CreateRawAttendanceLogDto, actor: AccessTokenPayload) {
-    const companyId = await this.ensureCompanyExists(
-      resolveScopedCompanyId(actor, dto.companyId),
-    );
-    const terminalId = await this.ensureTerminalBelongsToCompany(
-      dto.terminalId,
-      companyId,
-    );
+    const companyId = getCompanyId(actor, dto.companyId);
+    await this.checkCompany(companyId);
+
+    const terminalId = await this.checkTerminal(dto.terminalId, companyId);
     const employeeId = dto.employeeId
-      ? await this.ensureEmployeeInScope(dto.employeeId, companyId, actor)
+      ? await this.checkEmployee(dto.employeeId, companyId, actor)
       : null;
     const attendanceId = dto.attendanceId
-      ? await this.ensureAttendanceBelongsToCompany(
-          dto.attendanceId,
-          companyId,
-          employeeId,
-        )
+      ? await this.checkAttendance(dto.attendanceId, companyId, employeeId)
       : null;
+
+    const deviceUserId = trimToNull(dto.deviceUserId);
+    if (!deviceUserId) {
+      throw new ConflictException('Device user id is required');
+    }
 
     return this.prisma.rawAttendanceLog.create({
       data: {
@@ -45,10 +68,7 @@ export class RawAttendanceLogService {
         terminalId,
         employeeId,
         attendanceId,
-        deviceUserId: this.normalizeRequired(
-          dto.deviceUserId,
-          'Device user id is required',
-        ),
+        deviceUserId,
         eventTime: new Date(dto.eventTime),
         eventType: dto.eventType,
         rawPayload: dto.rawPayload as Prisma.InputJsonValue | undefined,
@@ -62,28 +82,41 @@ export class RawAttendanceLogService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const scope = resolveCompanyBranchScope(actor, {
-      companyId: query.companyId,
-    });
 
-    const where: Prisma.RawAttendanceLogWhereInput = {
-      ...(scope.companyId ? { companyId: scope.companyId } : {}),
-      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
-      ...(query.terminalId ? { terminalId: query.terminalId } : {}),
-      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
-      ...(query.attendanceId ? { attendanceId: query.attendanceId } : {}),
-      ...(query.eventType ? { eventType: query.eventType } : {}),
-      ...(query.processed !== undefined ? { processed: query.processed } : {}),
-      ...(trimToNull(query.deviceUserId)
-        ? {
-            deviceUserId: {
-              contains: trimToNull(query.deviceUserId) as string,
-              mode: 'insensitive',
-            },
-          }
-        : {}),
-      ...this.buildEventRangeFilter(query.eventFrom, query.eventTo),
-    };
+    const scope = getScope(actor, { companyId: query.companyId });
+
+    const where: RawLogFilter = {};
+    if (scope.companyId) {
+      where.companyId = scope.companyId;
+    }
+    if (scope.branchId) {
+      where.employee = { branchId: scope.branchId };
+    }
+    if (query.terminalId) {
+      where.terminalId = query.terminalId;
+    }
+    if (query.employeeId) {
+      where.employeeId = query.employeeId;
+    }
+    if (query.attendanceId) {
+      where.attendanceId = query.attendanceId;
+    }
+    if (query.eventType) {
+      where.eventType = query.eventType;
+    }
+    if (query.processed !== undefined) {
+      where.processed = query.processed;
+    }
+
+    const deviceUserId = trimToNull(query.deviceUserId);
+    if (deviceUserId) {
+      where.deviceUserId = { contains: deviceUserId, mode: 'insensitive' };
+    }
+
+    const eventFilter = this.buildEventFilter(query.eventFrom, query.eventTo);
+    if (eventFilter) {
+      where.eventTime = eventFilter;
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.rawAttendanceLog.findMany({
@@ -105,8 +138,8 @@ export class RawAttendanceLogService {
   }
 
   async findOne(id: string, actor: AccessTokenPayload) {
-    const log = await this.findRawAttendanceLogByIdOrThrow(id);
-    await this.assertRecordInScope(actor, log);
+    const log = await this.getLogById(id);
+    await this.checkRecordAccess(actor, log);
     return log;
   }
 
@@ -115,75 +148,75 @@ export class RawAttendanceLogService {
     dto: UpdateRawAttendanceLogDto,
     actor: AccessTokenPayload,
   ) {
-    const existing = await this.findRawAttendanceLogByIdOrThrow(id);
-    await this.assertRecordInScope(actor, existing);
+    const existing = await this.getLogById(id);
+    await this.checkRecordAccess(actor, existing);
 
-    const companyId =
-      dto.companyId !== undefined
-        ? await this.ensureCompanyExists(
-            resolveScopedCompanyId(actor, dto.companyId),
-          )
-        : existing.companyId;
-    const terminalId =
-      dto.terminalId !== undefined
-        ? await this.ensureTerminalBelongsToCompany(dto.terminalId, companyId)
-        : await this.ensureTerminalBelongsToCompany(
-            existing.terminalId,
-            companyId,
-          );
-    const employeeId =
-      dto.employeeId !== undefined
-        ? dto.employeeId
-          ? await this.ensureEmployeeInScope(dto.employeeId, companyId, actor)
-          : null
-        : existing.employeeId;
-    const attendanceId =
-      dto.attendanceId !== undefined
-        ? dto.attendanceId
-          ? await this.ensureAttendanceBelongsToCompany(
-              dto.attendanceId,
-              companyId,
-              employeeId,
-            )
-          : null
-        : existing.attendanceId;
+    const data: RawLogData = {};
 
-    return this.prisma.rawAttendanceLog.update({
-      where: { id },
-      data: {
+    let companyId = existing.companyId;
+    if (dto.companyId !== undefined) {
+      companyId = getCompanyId(actor, dto.companyId);
+      await this.checkCompany(companyId);
+      data.companyId = companyId;
+    }
+
+    if (dto.terminalId !== undefined) {
+      data.terminalId = await this.checkTerminal(dto.terminalId, companyId);
+    } else if (dto.companyId !== undefined) {
+      data.terminalId = await this.checkTerminal(
+        existing.terminalId,
         companyId,
-        terminalId,
-        employeeId,
-        attendanceId,
-        ...(dto.deviceUserId !== undefined
-          ? {
-              deviceUserId: this.normalizeRequired(
-                dto.deviceUserId,
-                'Device user id is required',
-              ),
-            }
-          : {}),
-        ...(dto.eventTime !== undefined
-          ? { eventTime: new Date(dto.eventTime) }
-          : {}),
-        ...(dto.eventType !== undefined ? { eventType: dto.eventType } : {}),
-        ...(dto.rawPayload !== undefined
-          ? { rawPayload: dto.rawPayload as Prisma.InputJsonValue }
-          : {}),
-        ...(dto.processed !== undefined ? { processed: dto.processed } : {}),
-        ...(dto.error !== undefined ? { error: trimToNull(dto.error) } : {}),
-      },
-    });
+      );
+    }
+
+    let employeeId = existing.employeeId;
+    if (dto.employeeId !== undefined) {
+      employeeId = dto.employeeId
+        ? await this.checkEmployee(dto.employeeId, companyId, actor)
+        : null;
+      data.employeeId = employeeId;
+    }
+
+    if (dto.attendanceId !== undefined) {
+      data.attendanceId = dto.attendanceId
+        ? await this.checkAttendance(dto.attendanceId, companyId, employeeId)
+        : null;
+    }
+
+    if (dto.deviceUserId !== undefined) {
+      const deviceUserId = trimToNull(dto.deviceUserId);
+      if (!deviceUserId) {
+        throw new ConflictException('Device user id is required');
+      }
+      data.deviceUserId = deviceUserId;
+    }
+    if (dto.eventTime !== undefined) {
+      data.eventTime = new Date(dto.eventTime);
+    }
+    if (dto.eventType !== undefined) {
+      data.eventType = dto.eventType;
+    }
+    if (dto.rawPayload !== undefined) {
+      data.rawPayload = dto.rawPayload as Prisma.InputJsonValue;
+    }
+    if (dto.processed !== undefined) {
+      data.processed = dto.processed;
+    }
+    if (dto.error !== undefined) {
+      data.error = trimToNull(dto.error);
+    }
+
+    return this.prisma.rawAttendanceLog.update({ where: { id }, data });
   }
 
   async delete(id: string, actor: AccessTokenPayload) {
-    const log = await this.findRawAttendanceLogByIdOrThrow(id);
-    await this.assertRecordInScope(actor, log);
+    const log = await this.getLogById(id);
+    await this.checkRecordAccess(actor, log);
     await this.prisma.rawAttendanceLog.delete({ where: { id } });
     return { success: true as const, id };
   }
 
-  private async findRawAttendanceLogByIdOrThrow(id: string) {
+  private async getLogById(id: string) {
     const log = await this.prisma.rawAttendanceLog.findUnique({
       where: { id },
     });
@@ -193,7 +226,7 @@ export class RawAttendanceLogService {
     return log;
   }
 
-  private async assertRecordInScope(
+  private async checkRecordAccess(
     actor: AccessTokenPayload,
     record: { companyId: string; employeeId: string | null },
   ): Promise<void> {
@@ -202,7 +235,7 @@ export class RawAttendanceLogService {
       actor.role === 'admin' ||
       !record.employeeId
     ) {
-      assertWithinScope(actor, record);
+      checkAccess(actor, record);
       return;
     }
 
@@ -210,13 +243,13 @@ export class RawAttendanceLogService {
       where: { id: record.employeeId },
       select: { branchId: true },
     });
-    assertWithinScope(actor, {
+    checkAccess(actor, {
       companyId: record.companyId,
       branchId: employee?.branchId,
     });
   }
 
-  private async ensureCompanyExists(companyId: string) {
+  private async checkCompany(companyId: string): Promise<void> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { id: true },
@@ -224,13 +257,12 @@ export class RawAttendanceLogService {
     if (!company) {
       throw new NotFoundException('Company not found');
     }
-    return company.id;
   }
 
-  private async ensureTerminalBelongsToCompany(
+  private async checkTerminal(
     terminalId: string,
     companyId: string,
-  ) {
+  ): Promise<string> {
     const terminal = await this.prisma.terminal.findUnique({
       where: { id: terminalId },
       select: { id: true, companyId: true },
@@ -239,18 +271,16 @@ export class RawAttendanceLogService {
       throw new NotFoundException('Terminal not found');
     }
     if (terminal.companyId !== companyId) {
-      throw new ConflictException(
-        'Terminal does not belong to the selected company',
-      );
+      throw new ConflictException('Terminal is not in this company');
     }
     return terminal.id;
   }
 
-  private async ensureEmployeeInScope(
+  private async checkEmployee(
     employeeId: string,
     companyId: string,
     actor: AccessTokenPayload,
-  ) {
+  ): Promise<string> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       select: { id: true, companyId: true, branchId: true },
@@ -259,19 +289,17 @@ export class RawAttendanceLogService {
       throw new NotFoundException('Employee not found');
     }
     if (employee.companyId !== companyId) {
-      throw new ConflictException(
-        'Employee does not belong to the selected company',
-      );
+      throw new ConflictException('Employee is not in this company');
     }
-    assertWithinScope(actor, employee);
+    checkAccess(actor, employee);
     return employee.id;
   }
 
-  private async ensureAttendanceBelongsToCompany(
+  private async checkAttendance(
     attendanceId: string,
     companyId: string,
     employeeId: string | null,
-  ) {
+  ): Promise<string> {
     const attendance = await this.prisma.attendance.findUnique({
       where: { id: attendanceId },
       select: { id: true, companyId: true, employeeId: true },
@@ -280,39 +308,29 @@ export class RawAttendanceLogService {
       throw new NotFoundException('Attendance not found');
     }
     if (attendance.companyId !== companyId) {
-      throw new ConflictException(
-        'Attendance does not belong to the selected company',
-      );
+      throw new ConflictException('Attendance is not in this company');
     }
     if (employeeId && attendance.employeeId !== employeeId) {
-      throw new ConflictException(
-        'Attendance does not belong to the selected employee',
-      );
+      throw new ConflictException('Attendance is not for this employee');
     }
     return attendance.id;
   }
 
-  private buildEventRangeFilter(
+  private buildEventFilter(
     eventFrom?: string,
     eventTo?: string,
-  ): Prisma.RawAttendanceLogWhereInput {
+  ): { gte?: Date; lte?: Date } | undefined {
     if (!eventFrom && !eventTo) {
-      return {};
+      return undefined;
     }
 
-    return {
-      eventTime: {
-        ...(eventFrom ? { gte: new Date(eventFrom) } : {}),
-        ...(eventTo ? { lte: new Date(eventTo) } : {}),
-      },
-    };
-  }
-
-  private normalizeRequired(value: string, message: string) {
-    const normalized = trimToNull(value);
-    if (!normalized) {
-      throw new ConflictException(message);
+    const range: { gte?: Date; lte?: Date } = {};
+    if (eventFrom) {
+      range.gte = new Date(eventFrom);
     }
-    return normalized;
+    if (eventTo) {
+      range.lte = new Date(eventTo);
+    }
+    return range;
   }
 }

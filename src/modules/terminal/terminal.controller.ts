@@ -19,14 +19,14 @@ import { UpdateTerminalDto } from './dto/update-terminal.dto';
 import { TerminalService } from './terminal.service';
 
 @ApiTags('Terminals')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('terminals')
 export class TerminalController {
   constructor(private readonly terminalService: TerminalService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create terminal - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateTerminalDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -35,7 +35,9 @@ export class TerminalController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get terminals - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: TerminalQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -44,7 +46,9 @@ export class TerminalController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get terminal by id - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -53,7 +57,9 @@ export class TerminalController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update terminal - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTerminalDto,
@@ -63,7 +69,9 @@ export class TerminalController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete terminal - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

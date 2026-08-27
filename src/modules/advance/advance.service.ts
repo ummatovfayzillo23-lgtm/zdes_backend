@@ -3,13 +3,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { getMonthKey, trimToNull } from '../../common/utils/helpers';
 import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-  resolveScopedCompanyId,
+  checkAccess,
+  getScope,
+  getCompanyId,
 } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { NotificationService } from '../notification/notification.service';
@@ -17,6 +16,31 @@ import { notificationTemplates } from '../notification/notification.templates';
 import { AdvanceQueryDto } from './dto/advance-query.dto';
 import { CreateAdvanceDto } from './dto/create-advance.dto';
 import { UpdateAdvanceDto } from './dto/update-advance.dto';
+
+type AdvanceFilter = {
+  companyId?: string;
+  employee?: { branchId: string };
+  employeeId?: string;
+  month?: string;
+  date?: { gte?: Date; lte?: Date };
+};
+
+type AdvanceData = {
+  updatedById: string;
+  companyId?: string;
+  employeeId?: string;
+  amount?: number;
+  date?: Date;
+  month?: string;
+  note?: string | null;
+};
+
+type Employee = {
+  id: string;
+  branchId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+};
 
 @Injectable()
 export class AdvanceService {
@@ -26,24 +50,19 @@ export class AdvanceService {
   ) {}
 
   async create(dto: CreateAdvanceDto, actor: AccessTokenPayload) {
-    const companyId = await this.ensureCompanyExists(
-      resolveScopedCompanyId(actor, dto.companyId),
-    );
-    const employee = await this.ensureEmployeeInScope(
-      dto.employeeId,
-      companyId,
-      actor,
-    );
+    const companyId = getCompanyId(actor, dto.companyId);
+    await this.checkCompany(companyId);
+    const employee = await this.checkEmployee(dto.employeeId, companyId, actor);
 
-    const advanceDate = new Date(dto.date);
-    const month = this.resolveMonth(dto.month, advanceDate);
+    const date = new Date(dto.date);
+    const month = trimToNull(dto.month) ?? getMonthKey(date);
 
     const advance = await this.prisma.advance.create({
       data: {
         companyId,
         employeeId: employee.id,
         amount: dto.amount,
-        date: advanceDate,
+        date,
         month,
         note: trimToNull(dto.note),
         createdById: actor.sub,
@@ -73,20 +92,32 @@ export class AdvanceService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const scope = resolveCompanyBranchScope(actor, {
+
+    const scope = getScope(actor, {
       companyId: query.companyId,
       branchId: query.branchId,
     });
 
-    const where: Prisma.AdvanceWhereInput = {
-      ...(scope.companyId ? { companyId: scope.companyId } : {}),
-      ...(scope.branchId ? { employee: { branchId: scope.branchId } } : {}),
-      ...(query.employeeId ? { employeeId: query.employeeId } : {}),
-      ...(trimToNull(query.month)
-        ? { month: trimToNull(query.month) as string }
-        : {}),
-      ...this.buildDateRangeFilter(query.dateFrom, query.dateTo),
-    };
+    const where: AdvanceFilter = {};
+    if (scope.companyId) {
+      where.companyId = scope.companyId;
+    }
+    if (scope.branchId) {
+      where.employee = { branchId: scope.branchId };
+    }
+    if (query.employeeId) {
+      where.employeeId = query.employeeId;
+    }
+
+    const month = trimToNull(query.month);
+    if (month) {
+      where.month = month;
+    }
+
+    const dateFilter = this.buildDateFilter(query.dateFrom, query.dateTo);
+    if (dateFilter) {
+      where.date = dateFilter;
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.advance.findMany({
@@ -108,84 +139,84 @@ export class AdvanceService {
   }
 
   async findOne(id: string, actor: AccessTokenPayload) {
-    const advance = await this.findAdvanceByIdOrThrow(id);
-    await this.assertRecordInScope(actor, advance);
+    const advance = await this.getAdvanceById(id);
+    await this.checkRecordAccess(actor, advance);
     return advance;
   }
 
   async update(id: string, dto: UpdateAdvanceDto, actor: AccessTokenPayload) {
-    const existingAdvance = await this.findAdvanceByIdOrThrow(id);
-    await this.assertRecordInScope(actor, existingAdvance);
+    const existing = await this.getAdvanceById(id);
+    await this.checkRecordAccess(actor, existing);
 
-    const nextCompanyId =
-      dto.companyId !== undefined
-        ? await this.ensureCompanyExists(
-            resolveScopedCompanyId(actor, dto.companyId),
-          )
-        : existingAdvance.companyId;
-    const nextEmployeeId = (
-      dto.employeeId !== undefined
-        ? await this.ensureEmployeeInScope(dto.employeeId, nextCompanyId, actor)
-        : await this.ensureEmployeeInScope(
-            existingAdvance.employeeId,
-            nextCompanyId,
-            actor,
-          )
-    ).id;
-    const nextDate = dto.date ? new Date(dto.date) : existingAdvance.date;
-    const nextMonth =
-      dto.month !== undefined
-        ? this.resolveMonth(dto.month, nextDate)
-        : dto.date
-          ? getMonthKey(nextDate)
-          : existingAdvance.month;
+    const data: AdvanceData = { updatedById: actor.sub };
 
-    return this.prisma.advance.update({
-      where: { id },
-      data: {
-        companyId: nextCompanyId,
-        employeeId: nextEmployeeId,
-        ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
-        ...(dto.date ? { date: nextDate } : {}),
-        month: nextMonth,
-        ...(dto.note !== undefined ? { note: trimToNull(dto.note) } : {}),
-        updatedById: actor.sub,
-      },
-    });
+    let companyId = existing.companyId;
+    if (dto.companyId !== undefined) {
+      companyId = getCompanyId(actor, dto.companyId);
+      await this.checkCompany(companyId);
+      data.companyId = companyId;
+    }
+
+    if (dto.employeeId !== undefined) {
+      const employee = await this.checkEmployee(
+        dto.employeeId,
+        companyId,
+        actor,
+      );
+      data.employeeId = employee.id;
+    } else if (dto.companyId !== undefined) {
+      const employee = await this.checkEmployee(
+        existing.employeeId,
+        companyId,
+        actor,
+      );
+      data.employeeId = employee.id;
+    }
+
+    const date = dto.date ? new Date(dto.date) : existing.date;
+    if (dto.date) {
+      data.date = date;
+    }
+
+    if (dto.month !== undefined) {
+      data.month = trimToNull(dto.month) ?? getMonthKey(date);
+    } else if (dto.date) {
+      data.month = getMonthKey(date);
+    }
+
+    if (dto.amount !== undefined) {
+      data.amount = dto.amount;
+    }
+    if (dto.note !== undefined) {
+      data.note = trimToNull(dto.note);
+    }
+
+    return this.prisma.advance.update({ where: { id }, data });
   }
 
   async delete(id: string, actor: AccessTokenPayload) {
-    const advance = await this.findAdvanceByIdOrThrow(id);
-    await this.assertRecordInScope(actor, advance);
+    const advance = await this.getAdvanceById(id);
+    await this.checkRecordAccess(actor, advance);
 
-    await this.prisma.advance.delete({
-      where: { id },
-    });
+    await this.prisma.advance.delete({ where: { id } });
 
-    return {
-      success: true as const,
-      id,
-    };
+    return { success: true as const, id };
   }
 
-  private async findAdvanceByIdOrThrow(id: string) {
-    const advance = await this.prisma.advance.findUnique({
-      where: { id },
-    });
-
+  private async getAdvanceById(id: string) {
+    const advance = await this.prisma.advance.findUnique({ where: { id } });
     if (!advance) {
       throw new NotFoundException('Advance not found');
     }
-
     return advance;
   }
 
-  private async assertRecordInScope(
+  private async checkRecordAccess(
     actor: AccessTokenPayload,
     record: { companyId: string; employeeId: string },
   ): Promise<void> {
     if (actor.role === 'superadmin' || actor.role === 'admin') {
-      assertWithinScope(actor, record);
+      checkAccess(actor, record);
       return;
     }
 
@@ -193,35 +224,27 @@ export class AdvanceService {
       where: { id: record.employeeId },
       select: { branchId: true },
     });
-    assertWithinScope(actor, {
+    checkAccess(actor, {
       companyId: record.companyId,
       branchId: employee?.branchId,
     });
   }
 
-  private async ensureCompanyExists(companyId: string): Promise<string> {
+  private async checkCompany(companyId: string): Promise<void> {
     const company = await this.prisma.company.findUnique({
       where: { id: companyId },
       select: { id: true },
     });
-
     if (!company) {
       throw new NotFoundException('Company not found');
     }
-
-    return company.id;
   }
 
-  private async ensureEmployeeInScope(
+  private async checkEmployee(
     employeeId: string,
     companyId: string,
     actor: AccessTokenPayload,
-  ): Promise<{
-    id: string;
-    branchId: string | null;
-    firstName: string | null;
-    lastName: string | null;
-  }> {
+  ): Promise<Employee> {
     const employee = await this.prisma.user.findUnique({
       where: { id: employeeId },
       select: {
@@ -236,14 +259,10 @@ export class AdvanceService {
     if (!employee) {
       throw new NotFoundException('Employee not found');
     }
-
     if (employee.companyId !== companyId) {
-      throw new ConflictException(
-        'Employee does not belong to the selected company',
-      );
+      throw new ConflictException('Employee is not in this company');
     }
-
-    assertWithinScope(actor, employee);
+    checkAccess(actor, employee);
 
     return employee;
   }
@@ -258,23 +277,21 @@ export class AdvanceService {
     );
   }
 
-  private resolveMonth(month: string | undefined, date: Date): string {
-    return trimToNull(month) ?? getMonthKey(date);
-  }
-
-  private buildDateRangeFilter(
+  private buildDateFilter(
     dateFrom?: string,
     dateTo?: string,
-  ): Prisma.AdvanceWhereInput {
+  ): { gte?: Date; lte?: Date } | undefined {
     if (!dateFrom && !dateTo) {
-      return {};
+      return undefined;
     }
 
-    return {
-      date: {
-        ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-        ...(dateTo ? { lte: new Date(dateTo) } : {}),
-      },
-    };
+    const range: { gte?: Date; lte?: Date } = {};
+    if (dateFrom) {
+      range.gte = new Date(dateFrom);
+    }
+    if (dateTo) {
+      range.lte = new Date(dateTo);
+    }
+    return range;
   }
 }

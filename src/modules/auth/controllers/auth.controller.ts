@@ -1,8 +1,4 @@
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   Body,
   Controller,
@@ -31,7 +27,7 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Login - superadmin, admin, manager, employee' })
+  @ApiOperation({ summary: 'public' })
   login(@Body() body: LoginDto, @Req() request: Request) {
     return this.authService.login(
       body.login,
@@ -44,11 +40,8 @@ export class AuthController {
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Refresh token - superadmin, admin, manager, employee' })
-  refresh(
-    @Body() body: RefreshTokenDto,
-    @Req() request: Request,
-  ) {
+  @ApiOperation({ summary: 'public' })
+  refresh(@Body() body: RefreshTokenDto, @Req() request: Request) {
     return this.authService.refresh(
       body.refreshToken,
       this.getRequestMeta(request, body),
@@ -58,7 +51,7 @@ export class AuthController {
   @Public()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Logout - superadmin, admin, manager, employee' })
+  @ApiOperation({ summary: 'public' })
   logout(@Body() body: RefreshTokenDto) {
     return this.authService.logout(body.refreshToken, body.pushToken);
   }
@@ -66,7 +59,7 @@ export class AuthController {
   @ApiBearerAuth()
   @Get('me')
   @Roles('superadmin', 'admin', 'manager', 'employee')
-  @ApiOperation({ summary: 'Current user - superadmin, admin, manager, employee' })
+  @ApiOperation({ summary: 'superadmin, admin, manager, employee' })
   me(@CurrentUser() user: AccessTokenPayload) {
     return this.authService.getCurrentUser(user);
   }

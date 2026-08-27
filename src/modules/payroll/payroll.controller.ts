@@ -21,14 +21,14 @@ import { UpdatePayrollDto } from './dto/update-payroll.dto';
 import { PayrollService } from './payroll.service';
 
 @ApiTags('Payrolls')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('payrolls')
 export class PayrollController {
   constructor(private readonly payrollService: PayrollService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create payroll - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreatePayrollDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -37,7 +37,9 @@ export class PayrollController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get payrolls - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: PayrollQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -46,10 +48,9 @@ export class PayrollController {
   }
 
   @Get('stats')
-  @ApiOperation({
-    summary:
-      'Get payroll statistics (paid/advance/remaining totals) - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   getStatistics(
     @Query() query: PayrollStatsQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -58,7 +59,9 @@ export class PayrollController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get payroll by id - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -67,7 +70,9 @@ export class PayrollController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update payroll - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePayrollDto,
@@ -77,10 +82,9 @@ export class PayrollController {
   }
 
   @Patch(':id/pay')
-  @ApiOperation({
-    summary:
-      'Record a salary payment (full or partial) - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   recordPayment(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RecordPayrollPaymentDto,
@@ -90,7 +94,9 @@ export class PayrollController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete payroll - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

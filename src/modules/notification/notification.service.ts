@@ -4,19 +4,40 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { NotificationIcon, Prisma } from '@prisma/client';
-import { PrismaService } from '../../common/congif/prisma/prisma.service';
+import type { NotificationIcon } from '@prisma/client';
+import { PrismaService } from '../../common/config/prisma/prisma.service';
 import { FirebaseService } from '../../common/firebase/firebase.service';
 import { trimToNull } from '../../common/utils/helpers';
-import {
-  assertWithinScope,
-  resolveCompanyBranchScope,
-} from '../../common/utils/scope.util';
+import { checkAccess, getScope } from '../../common/utils/scope.util';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
 import type { NotificationTemplate } from './notification.templates';
+
+type Search = { contains: string; mode: 'insensitive' };
+
+type NotificationFilter = {
+  userId?: string;
+  user?: { companyId: string; branchId?: string };
+  icon?: NotificationIcon;
+  isRead?: boolean;
+  OR?: { title?: Search; message?: Search }[];
+};
+
+type NotificationData = {
+  userId?: string | null;
+  title?: string;
+  message?: string;
+  icon?: NotificationIcon;
+  isRead?: boolean;
+};
+
+type OversightRecipient = {
+  companyId?: string;
+  branchId?: string;
+  role: 'admin' | 'manager';
+};
 
 @Injectable()
 export class NotificationService {
@@ -27,23 +48,19 @@ export class NotificationService {
 
   async create(dto: CreateNotificationDto, actor: AccessTokenPayload) {
     if (actor.role !== 'superadmin' && !dto.userId) {
-      throw new ForbiddenException(
-        'userId is required for non-superadmin actors',
-      );
+      throw new ForbiddenException('userId is required');
     }
 
-    const userId = dto.userId
-      ? await this.ensureUserInScope(dto.userId, actor)
-      : null;
+    const userId = dto.userId ? await this.checkUser(dto.userId, actor) : null;
 
-    const title = this.normalizeRequired(
-      dto.title,
-      'Notification title is required',
-    );
-    const message = this.normalizeRequired(
-      dto.message,
-      'Notification message is required',
-    );
+    const title = trimToNull(dto.title);
+    if (!title) {
+      throw new ConflictException('Title is required');
+    }
+    const message = trimToNull(dto.message);
+    if (!message) {
+      throw new ConflictException('Message is required');
+    }
 
     const notification = await this.prisma.notification.create({
       data: {
@@ -60,10 +77,6 @@ export class NotificationService {
     return notification;
   }
 
-  /**
-   * Creates a notification + sends push without actor/scope checks.
-   * For internal use by other modules (attendance, advance, leave, etc.).
-   */
   async notifyUser(
     userId: string,
     title: string,
@@ -91,25 +104,22 @@ export class NotificationService {
     );
   }
 
-  /**
-   * Notifies the company's admins and the employee's branch manager(s) —
-   * used for oversight (advance/leave created for an employee), never the
-   * employee themselves and never the actor who performed the action.
-   */
   async notifyOversight(
     companyId: string,
     branchId: string | null,
     excludeUserId: string,
     template: NotificationTemplate,
   ): Promise<void> {
+    const or: OversightRecipient[] = [{ companyId, role: 'admin' }];
+    if (branchId) {
+      or.push({ branchId, role: 'manager' });
+    }
+
     const recipients = await this.prisma.user.findMany({
       where: {
         isActive: true,
         id: { not: excludeUserId },
-        OR: [
-          { companyId, role: 'admin' },
-          ...(branchId ? [{ branchId, role: 'manager' as const }] : []),
-        ],
+        OR: or,
       },
       select: { id: true },
     });
@@ -147,30 +157,33 @@ export class NotificationService {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const skip = (page - 1) * limit;
-    const search = trimToNull(query.search);
-    const scope = resolveCompanyBranchScope(actor);
 
-    const where: Prisma.NotificationWhereInput = {
-      ...(query.userId ? { userId: query.userId } : {}),
-      ...(scope.companyId
-        ? {
-            user: {
-              companyId: scope.companyId,
-              ...(scope.branchId ? { branchId: scope.branchId } : {}),
-            },
-          }
-        : {}),
-      ...(query.icon ? { icon: query.icon } : {}),
-      ...(query.isRead !== undefined ? { isRead: query.isRead } : {}),
-      ...(search
-        ? {
-            OR: [
-              { title: { contains: search, mode: 'insensitive' } },
-              { message: { contains: search, mode: 'insensitive' } },
-            ],
-          }
-        : {}),
-    };
+    const scope = getScope(actor);
+
+    const where: NotificationFilter = {};
+    if (query.userId) {
+      where.userId = query.userId;
+    }
+    if (scope.companyId) {
+      where.user = { companyId: scope.companyId };
+      if (scope.branchId) {
+        where.user.branchId = scope.branchId;
+      }
+    }
+    if (query.icon) {
+      where.icon = query.icon;
+    }
+    if (query.isRead !== undefined) {
+      where.isRead = query.isRead;
+    }
+
+    const search = trimToNull(query.search);
+    if (search) {
+      where.OR = [
+        { title: { contains: search, mode: 'insensitive' } },
+        { message: { contains: search, mode: 'insensitive' } },
+      ];
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.notification.findMany({
@@ -192,8 +205,8 @@ export class NotificationService {
   }
 
   async findOne(id: string, actor: AccessTokenPayload) {
-    const notification = await this.findNotificationByIdOrThrow(id);
-    await this.assertNotificationInScope(actor, notification);
+    const notification = await this.getNotificationById(id);
+    await this.checkNotificationAccess(actor, notification);
     return notification;
   }
 
@@ -202,50 +215,47 @@ export class NotificationService {
     dto: UpdateNotificationDto,
     actor: AccessTokenPayload,
   ) {
-    const existing = await this.findNotificationByIdOrThrow(id);
-    await this.assertNotificationInScope(actor, existing);
+    const existing = await this.getNotificationById(id);
+    await this.checkNotificationAccess(actor, existing);
 
-    const userId =
-      dto.userId !== undefined
-        ? dto.userId
-          ? await this.ensureUserInScope(dto.userId, actor)
-          : null
-        : undefined;
+    const data: NotificationData = {};
 
-    return this.prisma.notification.update({
-      where: { id },
-      data: {
-        ...(userId !== undefined ? { userId } : {}),
-        ...(dto.title !== undefined
-          ? {
-              title: this.normalizeRequired(
-                dto.title,
-                'Notification title is required',
-              ),
-            }
-          : {}),
-        ...(dto.message !== undefined
-          ? {
-              message: this.normalizeRequired(
-                dto.message,
-                'Notification message is required',
-              ),
-            }
-          : {}),
-        ...(dto.icon !== undefined ? { icon: dto.icon } : {}),
-        ...(dto.isRead !== undefined ? { isRead: dto.isRead } : {}),
-      },
-    });
+    if (dto.userId !== undefined) {
+      data.userId = dto.userId ? await this.checkUser(dto.userId, actor) : null;
+    }
+
+    if (dto.title !== undefined) {
+      const title = trimToNull(dto.title);
+      if (!title) {
+        throw new ConflictException('Title is required');
+      }
+      data.title = title;
+    }
+    if (dto.message !== undefined) {
+      const message = trimToNull(dto.message);
+      if (!message) {
+        throw new ConflictException('Message is required');
+      }
+      data.message = message;
+    }
+    if (dto.icon !== undefined) {
+      data.icon = dto.icon;
+    }
+    if (dto.isRead !== undefined) {
+      data.isRead = dto.isRead;
+    }
+
+    return this.prisma.notification.update({ where: { id }, data });
   }
 
   async delete(id: string, actor: AccessTokenPayload) {
-    const notification = await this.findNotificationByIdOrThrow(id);
-    await this.assertNotificationInScope(actor, notification);
+    const notification = await this.getNotificationById(id);
+    await this.checkNotificationAccess(actor, notification);
     await this.prisma.notification.delete({ where: { id } });
     return { success: true as const, id };
   }
 
-  private async findNotificationByIdOrThrow(id: string) {
+  private async getNotificationById(id: string) {
     const notification = await this.prisma.notification.findUnique({
       where: { id },
     });
@@ -255,7 +265,7 @@ export class NotificationService {
     return notification;
   }
 
-  private async assertNotificationInScope(
+  private async checkNotificationAccess(
     actor: AccessTokenPayload,
     notification: { userId: string | null },
   ): Promise<void> {
@@ -273,10 +283,10 @@ export class NotificationService {
       where: { id: notification.userId },
       select: { companyId: true, branchId: true },
     });
-    assertWithinScope(actor, user ?? { companyId: null, branchId: null });
+    checkAccess(actor, user ?? { companyId: null, branchId: null });
   }
 
-  private async ensureUserInScope(
+  private async checkUser(
     userId: string,
     actor: AccessTokenPayload,
   ): Promise<string> {
@@ -287,15 +297,7 @@ export class NotificationService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    assertWithinScope(actor, user);
+    checkAccess(actor, user);
     return user.id;
-  }
-
-  private normalizeRequired(value: string, message: string) {
-    const normalized = trimToNull(value);
-    if (!normalized) {
-      throw new ConflictException(message);
-    }
-    return normalized;
   }
 }

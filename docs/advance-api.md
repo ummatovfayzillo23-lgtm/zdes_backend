@@ -18,7 +18,7 @@ Same shared helpers as the rest of the codebase. `Advance` has **no `branchId` c
 | `admin` | forced to own company; foreign value → `403` | free within own company — pass `branchId` to narrow to one branch, or omit for company-wide |
 | `manager` | forced to own company | forced to own branch |
 
-- **Create**: `employeeId` must belong to the resolved `companyId` (`409` otherwise) and pass `assertWithinScope` — a manager can only create an advance for an employee in their own branch.
+- **Create**: `employeeId` must belong to the resolved `companyId` (`409` otherwise) and pass `checkAccess` — a manager can only create an advance for an employee in their own branch.
 - **List / get one / update / delete**: same pattern as Payroll's `assertRecordInScope` — superadmin/admin checked directly against the advance's own `companyId`; manager additionally checked against the related employee's `branchId`.
 
 ---
@@ -65,7 +65,7 @@ Same shared helpers as the rest of the codebase. `Advance` has **no `branchId` c
 ```
 
 **What happens:**
-1. `companyId` resolved (`resolveScopedCompanyId`) and verified to exist.
+1. `companyId` resolved (`getCompanyId`) and verified to exist.
 2. Employee resolved and checked to belong to that company + within actor's scope.
 3. `month` derived from `date` if not explicitly given.
 4. Advance row created.

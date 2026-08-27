@@ -19,14 +19,14 @@ import { UpdateHolidayDto } from './dto/update-holiday.dto';
 import { HolidayService } from './holiday.service';
 
 @ApiTags('Holidays')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('holidays')
 export class HolidayController {
   constructor(private readonly holidayService: HolidayService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create holiday - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateHolidayDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -35,7 +35,9 @@ export class HolidayController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get holidays - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: HolidayQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -44,7 +46,9 @@ export class HolidayController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get holiday by id - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -53,7 +57,9 @@ export class HolidayController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update holiday - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateHolidayDto,
@@ -63,7 +69,9 @@ export class HolidayController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete holiday - superadmin, admin, manager' })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

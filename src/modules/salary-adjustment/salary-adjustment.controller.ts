@@ -19,8 +19,6 @@ import { UpdateSalaryAdjustmentDto } from './dto/update-salary-adjustment.dto';
 import { SalaryAdjustmentService } from './salary-adjustment.service';
 
 @ApiTags('Salary Adjustments')
-@ApiBearerAuth()
-@Roles('superadmin', 'admin', 'manager')
 @Controller('salary-adjustments')
 export class SalaryAdjustmentController {
   constructor(
@@ -28,9 +26,9 @@ export class SalaryAdjustmentController {
   ) {}
 
   @Post()
-  @ApiOperation({
-    summary: 'Create salary adjustment - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   create(
     @Body() dto: CreateSalaryAdjustmentDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -39,9 +37,9 @@ export class SalaryAdjustmentController {
   }
 
   @Get()
-  @ApiOperation({
-    summary: 'Get salary adjustments - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: SalaryAdjustmentQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -50,9 +48,9 @@ export class SalaryAdjustmentController {
   }
 
   @Get(':id')
-  @ApiOperation({
-    summary: 'Get salary adjustment by id - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -61,9 +59,9 @@ export class SalaryAdjustmentController {
   }
 
   @Patch(':id')
-  @ApiOperation({
-    summary: 'Update salary adjustment - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSalaryAdjustmentDto,
@@ -73,9 +71,9 @@ export class SalaryAdjustmentController {
   }
 
   @Delete(':id')
-  @ApiOperation({
-    summary: 'Delete salary adjustment - superadmin, admin, manager',
-  })
+  @ApiBearerAuth()
+  @Roles('superadmin', 'admin', 'manager')
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   delete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,

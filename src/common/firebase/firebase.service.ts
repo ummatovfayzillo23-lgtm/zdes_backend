@@ -5,7 +5,7 @@ import {
   type Message,
   type SendResponse,
 } from 'firebase-admin/messaging';
-import { PrismaService } from '../congif/prisma/prisma.service';
+import { PrismaService } from '../config/prisma/prisma.service';
 
 @Injectable()
 export class FirebaseService implements OnModuleInit {

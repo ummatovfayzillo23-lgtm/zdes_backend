@@ -10,7 +10,7 @@ A `Holiday` is a non-working date range (e.g. "Navruz bayrami", "New Year") that
 
 ## Scoping rules — who can do what
 
-Every endpoint uses the same two helpers from `src/common/utils/scope.util.ts`: `resolveScopedCompanyId` (resolves which `companyId` a write applies to) and `resolveCompanyBranchScope` (resolves the effective `{ companyId, branchId }` filter). The three roles behave differently through those helpers:
+Every endpoint uses the same two helpers from `src/common/utils/scope.util.ts`: `getCompanyId` (resolves which `companyId` a write applies to) and `getScope` (resolves the effective `{ companyId, branchId }` filter). The three roles behave differently through those helpers:
 
 | Role | `companyId` | `branchId` | Can see/touch |
 |---|---|---|---|
@@ -26,9 +26,9 @@ This means the three roles form a strict hierarchy: superadmin (global) → admi
 
 Superadmin is the only role that is not auto-scoped — every write must say explicitly which company (and optionally which branch) it applies to.
 
-- **Create** (`POST /holidays`): `companyId` is **required** in the body (omitting it throws `400 Bad Request` — see `resolveScopedCompanyId`). `branchId` is optional: omit for a holiday that applies to the whole company, or set it to scope the holiday to one branch of that company.
+- **Create** (`POST /holidays`): `companyId` is **required** in the body (omitting it throws `400 Bad Request` — see `getCompanyId`). `branchId` is optional: omit for a holiday that applies to the whole company, or set it to scope the holiday to one branch of that company.
 - **List** (`GET /holidays`): `companyId`/`branchId` query params are used exactly as sent — no forced filter. Omitting both returns holidays across **every** company.
-- **Get one / Update / Delete** (`:id`): no ownership check at all (`assertWithinScope` short-circuits for `superadmin`) — a superadmin can read, edit, or delete any holiday regardless of which company or branch it belongs to.
+- **Get one / Update / Delete** (`:id`): no ownership check at all (`checkAccess` short-circuits for `superadmin`) — a superadmin can read, edit, or delete any holiday regardless of which company or branch it belongs to.
 - On **update**, a superadmin may even move a holiday to a different company by sending a new `companyId` (and optionally a `branchId` that belongs to that new company).
 
 In short: superadmin has no boundaries here — it is the platform-operator view across all tenants.
@@ -43,7 +43,7 @@ An admin's JWT carries a fixed `companyId`; every action is pinned to that compa
   - `branchId` omitted → **company-wide** holiday (applies to every branch/employee in the company).
   - `branchId` set → holiday scoped to that one branch only.
 - **List** (`GET /holidays`): `companyId` query param is ignored/overridden — always forced to the admin's own company. `branchId` can be used to further narrow to one branch, or omitted to see every holiday in the company (company-wide + all branch-specific ones).
-- **Get one / Update / Delete** (`:id`): allowed only if the holiday's `companyId` matches the admin's own company (checked via `assertWithinScope`); otherwise `403 Forbidden`. There is no branch restriction for admin — they can edit/delete a holiday scoped to any branch of their own company, or a company-wide one.
+- **Get one / Update / Delete** (`:id`): allowed only if the holiday's `companyId` matches the admin's own company (checked via `checkAccess`); otherwise `403 Forbidden`. There is no branch restriction for admin — they can edit/delete a holiday scoped to any branch of their own company, or a company-wide one.
 - On **update**, an admin cannot move a holiday to a different company (attempting a foreign `companyId` throws `403` the same as on create).
 
 In short: an admin's world is exactly one company; inside it they have full control over both company-wide and per-branch holidays.
@@ -54,9 +54,9 @@ In short: an admin's world is exactly one company; inside it they have full cont
 
 Not explicitly asked for, but included since the controller allows it and the restriction is real: a manager is scoped one level tighter than admin — to a single branch.
 
-- **Create**: `branchId` is always forced to the manager's own branch (`resolveCompanyBranchScope` overrides whatever — or nothing — was sent). A manager can **never** create a company-wide holiday.
+- **Create**: `branchId` is always forced to the manager's own branch (`getScope` overrides whatever — or nothing — was sent). A manager can **never** create a company-wide holiday.
 - **List**: always filtered to the manager's own company **and** own branch.
-- **Get one / Update / Delete**: allowed only if the holiday belongs to the manager's own company **and** own branch (`403` otherwise). A manager cannot touch a company-wide holiday (`branchId: null`) created by an admin/superadmin, even if it affects their branch's employees — only read access to it would come through `findAll`/`findOne` if scoping allowed it, but `assertWithinScope` blocks write/delete since a company-wide holiday's `branchId` is `null`, which doesn't equal the manager's `branchId`.
+- **Get one / Update / Delete**: allowed only if the holiday belongs to the manager's own company **and** own branch (`403` otherwise). A manager cannot touch a company-wide holiday (`branchId: null`) created by an admin/superadmin, even if it affects their branch's employees — only read access to it would come through `findAll`/`findOne` if scoping allowed it, but `checkAccess` blocks write/delete since a company-wide holiday's `branchId` is `null`, which doesn't equal the manager's `branchId`.
 
 ---
 

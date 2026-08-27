@@ -93,9 +93,11 @@ Every route is authenticated + role-checked by default unless explicitly `@Publi
 
 | Helper | Used for | Behavior |
 |---|---|---|
-| `resolveCompanyBranchScope(actor, requested)` | list/query filters | `superadmin` → whatever was requested (cross-tenant); `admin` → forced to own `companyId` (403 if a different one requested); `manager` → forced to own `companyId` **and** `branchId` |
-| `resolveScopedCompanyId(actor, providedCompanyId)` | create operations | `superadmin` must supply a `companyId`; everyone else forced to their own |
-| `assertWithinScope(actor, target)` | single-record access (get/update/delete) | `superadmin` always passes; others get `403` if `target.companyId` mismatches; `manager` additionally needs `target.branchId` to match |
+| `getScope(actor, requested)` | list/query filters | `superadmin` → requested filter if `companyId` given, else own `companyId` if the token carries one, else cross-tenant; `admin` → forced to own `companyId` (403 if a different one requested); `manager` → forced to own `companyId` **and** `branchId` |
+| `getCompanyId(actor, providedCompanyId)` | create operations | `superadmin` → `providedCompanyId` if sent, else token's own `companyId`, else `400`; everyone else forced to their own (`403` if a different one is sent) |
+| `checkAccess(actor, target)` | single-record access (get/update/delete) | `superadmin` always passes; others get `403` if `target.companyId` mismatches; `manager` additionally needs `target.branchId` to match |
+
+(Helpers renamed from `resolveCompanyBranchScope` / `resolveScopedCompanyId` / `assertWithinScope` during the code-style simplification pass — see `docs/code-style.md`.)
 
 > **Risk note**: since scope enforcement is manual per service method (no interceptor/global filter), a new endpoint that forgets to call these helpers would silently leak cross-tenant data. Worth checking whenever a new service method is added.
 
@@ -106,7 +108,7 @@ Every route is authenticated + role-checked by default unless explicitly `@Publi
 ### Login — `AuthService.login`
 1. Look up `User` by `login` or `email`.
 2. Verify password (bcrypt).
-3. `ensureUserCanLogin(user)`:
+3. `checkUserCanLogin(user)`:
    ```ts
    if (!LOGIN_ALLOWED_ROLES.includes(user.role)) throw ForbiddenException('You do not have access to login');
    if (!user.isActive) throw ForbiddenException('User is inactive');
@@ -130,7 +132,7 @@ Every route is authenticated + role-checked by default unless explicitly `@Publi
 
 ### Consequence: role changes are not instant
 Because the access token is a stateless, offline-verifiable JWT (valid up to 20 days), a role/company/branch change — or a block/deactivation — only takes effect:
-- immediately on `GET /auth/me` (re-fetches from DB, re-runs `ensureUserCanLogin`), and
+- immediately on `GET /auth/me` (re-fetches from DB, re-runs `checkUserCanLogin`), and
 - on `POST /auth/refresh` (re-checks DB),
 
 but **not** on any other endpoint until the current access token expires or is refreshed. A demoted or blocked user keeps working with an already-issued token elsewhere in the API until then.
@@ -146,7 +148,7 @@ There is **no self-registration endpoint** (no `POST /auth/register`). All users
 - **Create a user** — `POST /users` (`superadmin`, `admin` only; **managers cannot create users**):
   - `role` is optional on `CreateUserDto` (defaults to `employee`).
   - `if (actor.role !== 'superadmin' && dto.role === 'superadmin') → 403` — only a superadmin can mint another superadmin.
-  - `admin` is forced to their own `companyId` (`resolveScopedCompanyId`); `superadmin` can target any company.
+  - `admin` is forced to their own `companyId` (`getCompanyId`); `superadmin` can target any company.
 
 - **Change a role** — `PATCH /users/:id` (`superadmin`, `admin`, `manager`):
   - `if (actor.role !== 'superadmin' && (existing.role === 'superadmin' || dto.role === 'superadmin')) → 403` — non-superadmins can't touch superadmin accounts at all.
@@ -173,7 +175,7 @@ Independent booleans on `User`, orthogonal to `role`:
 | `isActive` | `true` | general on/off switch |
 | `isBlocked` | `false` | explicit suspension |
 
-Checked in `ensureUserCanLogin` at login, refresh, and `GET /auth/me` — **not** re-checked by `AccessTokenGuard`/`RolesGuard` on every other request (see [§4](#consequence-role-changes-are-not-instant)). There is no `isVerified`/email-verification concept in this system.
+Checked in `checkUserCanLogin` at login, refresh, and `GET /auth/me` — **not** re-checked by `AccessTokenGuard`/`RolesGuard` on every other request (see [§4](#consequence-role-changes-are-not-instant)). There is no `isVerified`/email-verification concept in this system.
 
 ---
 

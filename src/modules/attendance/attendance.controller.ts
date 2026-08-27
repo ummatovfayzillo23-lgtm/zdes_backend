@@ -41,15 +41,28 @@ const ATTENDANCE_IMAGE_BODY = {
   },
 };
 
+const CHECK_EVENT_BODY = {
+  schema: {
+    type: 'object',
+    properties: {
+      employeeId: { type: 'string' },
+      terminalId: { type: 'string' },
+      eventTime: { type: 'string' },
+      notes: { type: 'string' },
+      file: { type: 'string', format: 'binary' },
+    },
+  },
+};
+
 @ApiTags('Attendance')
-@ApiBearerAuth()
 @Controller('attendance')
 export class AttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
 
   @Get('kpi-template/:companyId')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin')
-  @ApiOperation({ summary: 'Get attendance KPI template - superadmin, admin' })
+  @ApiOperation({ summary: 'superadmin, admin' })
   getKpiTemplate(
     @Param('companyId', ParseUUIDPipe) companyId: string,
     @CurrentUser() actor: AccessTokenPayload,
@@ -58,8 +71,9 @@ export class AttendanceController {
   }
 
   @Put('kpi-template')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin')
-  @ApiOperation({ summary: 'Save attendance KPI template - superadmin, admin' })
+  @ApiOperation({ summary: 'superadmin, admin' })
   upsertKpiTemplate(
     @Body() dto: AttendanceKpiTemplateDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -68,24 +82,12 @@ export class AttendanceController {
   }
 
   @Post('check-in')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
   @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        employeeId: { type: 'string' },
-        terminalId: { type: 'string' },
-        eventTime: { type: 'string' },
-        notes: { type: 'string' },
-        file: { type: 'string', format: 'binary' },
-      },
-    },
-  })
+  @ApiBody(CHECK_EVENT_BODY)
   @UseInterceptors(FileInterceptor('file', imageUploadOptions('attendance')))
-  @ApiOperation({
-    summary: 'Check in with AWS face verification - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   checkIn(
     @Body() dto: AttendanceCheckInDto,
     @UploadedFile() file: Express.Multer.File,
@@ -95,25 +97,12 @@ export class AttendanceController {
   }
 
   @Post('check-out')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
   @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        employeeId: { type: 'string' },
-        terminalId: { type: 'string' },
-        eventTime: { type: 'string' },
-        notes: { type: 'string' },
-        file: { type: 'string', format: 'binary' },
-      },
-    },
-  })
+  @ApiBody(CHECK_EVENT_BODY)
   @UseInterceptors(FileInterceptor('file', imageUploadOptions('attendance')))
-  @ApiOperation({
-    summary:
-      'Check out with AWS face verification - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   checkOut(
     @Body() dto: AttendanceCheckOutDto,
     @UploadedFile() file: Express.Multer.File,
@@ -123,14 +112,12 @@ export class AttendanceController {
   }
 
   @Post('self/check-in')
+  @ApiBearerAuth()
   @Roles('employee')
   @ApiConsumes('multipart/form-data')
   @ApiBody(ATTENDANCE_IMAGE_BODY)
   @UseInterceptors(FileInterceptor('file', imageUploadOptions('attendance')))
-  @ApiOperation({
-    summary:
-      'Self check-in from the app with AWS face verification - employee',
-  })
+  @ApiOperation({ summary: 'employee' })
   selfCheckIn(
     @Body() dto: SelfAttendanceCheckInDto,
     @UploadedFile() file: Express.Multer.File,
@@ -140,14 +127,12 @@ export class AttendanceController {
   }
 
   @Post('self/check-out')
+  @ApiBearerAuth()
   @Roles('employee')
   @ApiConsumes('multipart/form-data')
   @ApiBody(ATTENDANCE_IMAGE_BODY)
   @UseInterceptors(FileInterceptor('file', imageUploadOptions('attendance')))
-  @ApiOperation({
-    summary:
-      'Self check-out from the app with AWS face verification - employee',
-  })
+  @ApiOperation({ summary: 'employee' })
   selfCheckOut(
     @Body() dto: SelfAttendanceCheckOutDto,
     @UploadedFile() file: Express.Multer.File,
@@ -157,10 +142,9 @@ export class AttendanceController {
   }
 
   @Get('self/sessions')
+  @ApiBearerAuth()
   @Roles('employee')
-  @ApiOperation({
-    summary: 'List my own check-in/check-out sessions - employee',
-  })
+  @ApiOperation({ summary: 'employee' })
   selfListSessions(
     @Query() query: AttendanceSessionQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -169,8 +153,9 @@ export class AttendanceController {
   }
 
   @Get()
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({ summary: 'Get attendance list - superadmin, admin, manager' })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findAll(
     @Query() query: AttendanceQueryDto,
     @CurrentUser() actor: AccessTokenPayload,
@@ -179,10 +164,9 @@ export class AttendanceController {
   }
 
   @Get(':id')
+  @ApiBearerAuth()
   @Roles('superadmin', 'admin', 'manager')
-  @ApiOperation({
-    summary: 'Get attendance by id - superadmin, admin, manager',
-  })
+  @ApiOperation({ summary: 'superadmin, admin, manager' })
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AccessTokenPayload,
