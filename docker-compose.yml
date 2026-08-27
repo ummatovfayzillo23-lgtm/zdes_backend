@@ -1,0 +1,17 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zdes_backend_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - zdes_uploads:/app/uploads
+
+volumes:
+  zdes_uploads:
+    name: zdes_backend_uploads

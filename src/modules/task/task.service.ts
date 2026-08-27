@@ -15,7 +15,9 @@ import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload
 import { NotificationService } from '../notification/notification.service';
 import {
   CreateTaskDto,
+  CreateSelfTaskDto,
   CreateTaskProjectDto,
+  MyTasksQueryDto,
   ReorderTasksDto,
   TaskProjectQueryDto,
   TaskQueryDto,
@@ -283,6 +285,87 @@ export class TaskService {
     }
 
     return task;
+  }
+
+  // ============================================================================
+  // Self-task: foydalanuvchi o'zi uchun task yaratadi va o'zi boshqaradi
+  // ============================================================================
+  async createSelf(
+    actor: AccessTokenPayload,
+    dto: CreateSelfTaskDto,
+  ): Promise<TaskWithRelations> {
+    if (!actor.companyId) {
+      throw new ForbiddenException('Actor is not assigned to a company');
+    }
+    this.validateTitle(dto.title);
+
+    const task = await this.prisma.task.create({
+      data: {
+        companyId: actor.companyId,
+        title: dto.title.trim(),
+        description: dto.description ?? null,
+        type: TaskType.feature,
+        status: TaskStatus.not_started,
+        priority: TaskPriority.normal,
+        createdById: actor.sub,
+        assignees: {
+          create: [{ userId: actor.sub }],
+        },
+      },
+      include: {
+        project: true,
+        department: true,
+        createdBy: true,
+        assignees: { include: { user: true } },
+      },
+    });
+
+    return task;
+  }
+
+  async findMyTasks(
+    actor: AccessTokenPayload,
+    query: MyTasksQueryDto,
+  ): Promise<{ items: TaskWithRelations[]; total: number; page: number; limit: number; totalPages: number }> {
+    if (!actor.companyId) {
+      throw new ForbiddenException('Actor is not assigned to a company');
+    }
+
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.TaskWhereInput = {
+      companyId: actor.companyId,
+      OR: [
+        { createdById: actor.sub },
+        { assignees: { some: { userId: actor.sub } } },
+      ],
+    };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.task.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          project: true,
+          department: true,
+          createdBy: true,
+          assignees: { include: { user: true } },
+        },
+      }),
+      this.prisma.task.count({ where }),
+    ]);
+
+    return {
+      items: items as TaskWithRelations[],
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
   async findOne(

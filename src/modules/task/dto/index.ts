@@ -7,3 +7,5 @@ export * from './reorder-tasks.dto';
 export * from './create-task-project.dto';
 export * from './update-task-project.dto';
 export * from './task-project-query.dto';
+export * from './create-self-task.dto';
+export * from './my-tasks-query.dto';

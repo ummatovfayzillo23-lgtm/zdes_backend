@@ -14,8 +14,10 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import {
+  CreateSelfTaskDto,
   CreateTaskDto,
   CreateTaskProjectDto,
+  MyTasksQueryDto,
   ReorderTasksDto,
   TaskProjectQueryDto,
   TaskQueryDto,
@@ -31,6 +33,30 @@ import { TaskService } from './task.service';
 @Controller('tasks')
 export class TaskController {
   constructor(private readonly taskService: TaskService) {}
+
+  @Post('self')
+  @Roles('superadmin', 'admin', 'manager', 'employee')
+  @ApiOperation({
+    summary: 'Create quick self task (token-based actor & assignee)',
+  })
+  createSelf(
+    @Body() dto: CreateSelfTaskDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.taskService.createSelf(actor, dto);
+  }
+
+  @Get('my')
+  @Roles('superadmin', 'admin', 'manager', 'employee')
+  @ApiOperation({
+    summary: 'Get only current user tasks with simple pagination (page, limit)',
+  })
+  findMyTasks(
+    @Query() query: MyTasksQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.taskService.findMyTasks(actor, query);
+  }
 
   @Post()
   @Roles('superadmin', 'admin', 'manager', 'employee')

@@ -3,13 +3,13 @@ import { IsOptional, IsString, MinLength } from 'class-validator';
 
 export class LoginDto {
   @ApiProperty({
-    example: 'admin',
+    example: 'superAdmin',
   })
   @IsString()
   login!: string;
 
   @ApiProperty({
-    example: '1234',
+    example: 'Password123',
   })
   @IsString()
   @MinLength(1)
