@@ -1,7 +1,16 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { AttendanceStatus } from '@prisma/client';
-import { IsEnum, IsInt, IsISO8601, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsISO8601,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class AttendanceQueryDto {
   @ApiPropertyOptional()
@@ -18,6 +27,15 @@ export class AttendanceQueryDto {
   @IsOptional()
   @IsUUID()
   employeeId?: string;
+
+  @ApiPropertyOptional({
+    example: 'john',
+    description:
+      'Search employees by name, login, phone or employee number',
+  })
+  @IsOptional()
+  @IsString()
+  search?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

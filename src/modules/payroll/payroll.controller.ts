@@ -15,6 +15,8 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AccessTokenPayload } from '../auth/interfaces/access-token-payload.interface';
 import { CreatePayrollDto } from './dto/create-payroll.dto';
 import { PayrollQueryDto } from './dto/payroll-query.dto';
+import { PayrollStatsQueryDto } from './dto/payroll-stats-query.dto';
+import { RecordPayrollPaymentDto } from './dto/record-payroll-payment.dto';
 import { UpdatePayrollDto } from './dto/update-payroll.dto';
 import { PayrollService } from './payroll.service';
 
@@ -43,6 +45,18 @@ export class PayrollController {
     return this.payrollService.findAll(query, actor);
   }
 
+  @Get('stats')
+  @ApiOperation({
+    summary:
+      'Get payroll statistics (paid/advance/remaining totals) - superadmin, admin, manager',
+  })
+  getStatistics(
+    @Query() query: PayrollStatsQueryDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.payrollService.getStatistics(query, actor);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get payroll by id - superadmin, admin, manager' })
   findOne(
@@ -60,6 +74,19 @@ export class PayrollController {
     @CurrentUser() actor: AccessTokenPayload,
   ) {
     return this.payrollService.update(id, dto, actor);
+  }
+
+  @Patch(':id/pay')
+  @ApiOperation({
+    summary:
+      'Record a salary payment (full or partial) - superadmin, admin, manager',
+  })
+  recordPayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RecordPayrollPaymentDto,
+    @CurrentUser() actor: AccessTokenPayload,
+  ) {
+    return this.payrollService.recordPayment(id, dto, actor);
   }
 
   @Delete(':id')

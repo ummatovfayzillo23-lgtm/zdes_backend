@@ -19,23 +19,24 @@ model Company {
   isActive  Boolean   @default(true)
   stoppedAt DateTime? @db.Timestamptz(6)
 
-  users             User[]
-  branches          Branch[]
-  departments       Department[]
-  positions         Position[]
-  workSchedules     WorkSchedule[]
-  workScheduleLinks WorkScheduleCompany[]
-  terminals         Terminal[]
-  holidays          Holiday[]
-  employeeLeaves    EmployeeLeave[]
-  attendances       Attendance[]
-  rawAttendanceLogs RawAttendanceLog[]
-  salaryAdjustments SalaryAdjustment[]
-  advances          Advance[]
-  payrolls          Payroll[]
-  settings          Setting[]
-  taskProjects      TaskProject[]
-  tasks             Task[]
+  users              User[]
+  branches           Branch[]
+  departments        Department[]
+  positions          Position[]
+  workSchedules      WorkSchedule[]
+  workScheduleLinks  WorkScheduleCompany[]
+  terminals          Terminal[]
+  holidays           Holiday[]
+  employeeLeaves     EmployeeLeave[]
+  attendances        Attendance[]
+  attendanceSessions AttendanceSession[]
+  rawAttendanceLogs  RawAttendanceLog[]
+  salaryAdjustments  SalaryAdjustment[]
+  advances           Advance[]
+  payrolls           Payroll[]
+  settings           Setting[]
+  taskProjects       TaskProject[]
+  tasks              Task[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -53,14 +54,15 @@ model Branch {
   radius    Int?    @default(100)
   isActive  Boolean @default(true)
 
-  company           Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  users             User[]
-  departments       Department[]
-  workScheduleLinks WorkScheduleCompany[]
-  terminals         Terminal[]
-  holidays          Holiday[]
-  employeeLeaves    EmployeeLeave[]
-  attendances       Attendance[]
+  company            Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  users              User[]
+  departments        Department[]
+  workScheduleLinks  WorkScheduleCompany[]
+  terminals          Terminal[]
+  holidays           Holiday[]
+  employeeLeaves     EmployeeLeave[]
+  attendances        Attendance[]
+  attendanceSessions AttendanceSession[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -155,17 +157,18 @@ model User {
   manager      User?  @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
   subordinates User[] @relation("UserManager")
 
-  attendances       Attendance[]
-  rawAttendanceLogs RawAttendanceLog[]
-  salaryAdjustments SalaryAdjustment[]
-  advances          Advance[]
-  employeeLeaves    EmployeeLeave[]
-  payrolls          Payroll[]
-  notifications     Notification[]
-  refreshTokens     RefreshToken[]
-  pushTokens        PushToken[]
-  createdTasks      Task[]             @relation("TaskCreatedBy")
-  taskAssignments   TaskAssignee[]
+  attendances        Attendance[]
+  attendanceSessions AttendanceSession[]
+  rawAttendanceLogs  RawAttendanceLog[]
+  salaryAdjustments  SalaryAdjustment[]
+  advances           Advance[]
+  employeeLeaves     EmployeeLeave[]
+  payrolls           Payroll[]
+  notifications      Notification[]
+  refreshTokens      RefreshToken[]
+  pushTokens         PushToken[]
+  createdTasks       Task[]             @relation("TaskCreatedBy")
+  taskAssignments    TaskAssignee[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -292,7 +295,8 @@ model Attendance {
   employee User      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   terminal Terminal? @relation(fields: [terminalId], references: [id], onDelete: SetNull)
 
-  rawLogs RawAttendanceLog[]
+  rawLogs  RawAttendanceLog[]
+  sessions AttendanceSession[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -304,6 +308,46 @@ model Attendance {
   @@index([terminalId])
   @@index([date])
   @@index([status])
+}
+
+/// A single continuous visit (one check-in/check-out pair) submitted by the
+/// employee themselves from the app, with a selfie verified against
+/// User.faceImageUrl via AWS Rekognition. Unlike Attendance (one row per day,
+/// first-in/last-out), an employee can have multiple sessions per day. Each
+/// session also updates the day's Attendance row (first-in/last-out) so
+/// payroll/KPI calculations keep working unchanged.
+model AttendanceSession {
+  id           String  @id @default(uuid()) @db.Uuid
+  companyId    String  @db.Uuid
+  branchId     String? @db.Uuid
+  employeeId   String  @db.Uuid
+  attendanceId String? @db.Uuid
+
+  date     DateTime  @db.Date
+  checkIn  DateTime  @db.Timestamptz(6)
+  checkOut DateTime? @db.Timestamptz(6)
+
+  checkInImageUrl    String  @db.VarChar(500)
+  checkOutImageUrl   String? @db.VarChar(500)
+  checkInSimilarity  Float
+  checkOutSimilarity Float?
+
+  workedMinutes Int     @default(0)
+  notes         String?
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch     Branch?     @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  employee   User        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  attendance Attendance? @relation(fields: [attendanceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([companyId])
+  @@index([branchId])
+  @@index([employeeId])
+  @@index([attendanceId])
+  @@index([date])
 }
 
 model RawAttendanceLog {
@@ -468,6 +512,7 @@ model Payroll {
   totalPenalty Decimal @default(0) @db.Decimal(15, 2)
   totalAdvance Decimal @default(0) @db.Decimal(15, 2)
   netSalary    Decimal @default(0) @db.Decimal(15, 2)
+  paidAmount   Decimal @default(0) @db.Decimal(15, 2)
 
   status PayrollStatus @default(draft)
 
@@ -669,6 +714,7 @@ enum AttendanceSource {
   terminal
   manual
   import
+  mobile
 }
 
 enum AttendanceStatus {
@@ -718,6 +764,7 @@ enum LeaveRequestStatus {
 enum PayrollStatus {
   draft
   confirmed
+  partially_paid
   paid
   cancelled
 }

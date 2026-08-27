@@ -1,27 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsISO8601, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsInt, IsISO8601, IsOptional, Max, Min } from 'class-validator';
 
-export class AdvanceQueryDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsUUID()
-  companyId?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsUUID()
-  branchId?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsUUID()
-  employeeId?: string;
-
-  @ApiPropertyOptional({ example: '2026-06' })
-  @IsOptional()
-  month?: string;
-
+export class AttendanceSessionQueryDto {
   @ApiPropertyOptional({ example: '2026-06-01' })
   @IsOptional()
   @IsISO8601({ strict: true })

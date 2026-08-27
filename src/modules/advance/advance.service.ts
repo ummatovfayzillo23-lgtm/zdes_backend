@@ -75,6 +75,7 @@ export class AdvanceService {
     const skip = (page - 1) * limit;
     const scope = resolveCompanyBranchScope(actor, {
       companyId: query.companyId,
+      branchId: query.branchId,
     });
 
     const where: Prisma.AdvanceWhereInput = {

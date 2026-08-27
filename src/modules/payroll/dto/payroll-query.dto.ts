@@ -12,6 +12,11 @@ export class PayrollQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
+  branchId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
   employeeId?: string;
 
   @ApiPropertyOptional({

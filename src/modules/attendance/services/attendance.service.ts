@@ -16,15 +16,20 @@ import {
 } from '@prisma/client';
 import type {
   Attendance,
+  AttendanceSession,
   SalaryAdjustment,
   User,
   WorkSchedule,
 } from '@prisma/client';
+import { readFile } from 'fs/promises';
 import { PrismaService } from '../../../common/congif/prisma/prisma.service';
+import {
+  assertFileProvided,
+  buildUploadUrl,
+} from '../../../common/upload/image-upload.util';
 import {
   DEFAULT_TIMEZONE,
   calculateMinutesDifference,
-  decodeBase64Image,
   getMonthKey,
   getWorkDayNumber,
   parseTimeToZonedDate,
@@ -49,8 +54,10 @@ import { AttendanceCheckInDto } from '../dto/attendance-check-in.dto';
 import { AttendanceCheckOutDto } from '../dto/attendance-check-out.dto';
 import { AttendanceKpiTemplateDto } from '../dto/attendance-kpi-template.dto';
 import { AttendanceQueryDto } from '../dto/attendance-query.dto';
+import { AttendanceSessionQueryDto } from '../dto/attendance-session-query.dto';
+import { SelfAttendanceCheckInDto } from '../dto/self-attendance-check-in.dto';
+import { SelfAttendanceCheckOutDto } from '../dto/self-attendance-check-out.dto';
 import { AwsFaceVerificationService } from './aws-face-verification.service';
-import { AwsS3Service } from './aws-s3.service';
 
 type AttendanceKpiTemplate = Required<
   Omit<AttendanceKpiTemplateDto, 'companyId'>
@@ -77,7 +84,6 @@ export class AttendanceService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly awsS3Service: AwsS3Service,
     private readonly awsFaceVerificationService: AwsFaceVerificationService,
     private readonly notification: NotificationService,
   ) {}
@@ -304,7 +310,12 @@ export class AttendanceService {
     };
   }
 
-  async checkIn(dto: AttendanceCheckInDto, actor: AccessTokenPayload) {
+  async checkIn(
+    dto: AttendanceCheckInDto,
+    file: Express.Multer.File,
+    actor: AccessTokenPayload,
+  ) {
+    const uploadedFile = assertFileProvided(file);
     const eventTime = this.parseEventTime(dto.eventTime);
     const employee = await this.findEmployeeOrThrow(dto.employeeId);
     assertWithinScope(actor, employee);
@@ -318,9 +329,7 @@ export class AttendanceService {
 
     const { imageUrl, similarity } = await this.verifyAndUploadAttendanceImage({
       employee,
-      eventType: 'check-in',
-      imageBase64: dto.imageBase64,
-      contentType: dto.contentType,
+      file: uploadedFile,
       similarityThreshold: template.faceSimilarityThreshold,
     });
 
@@ -412,7 +421,12 @@ export class AttendanceService {
     return this.toResponse(result.attendance, result.adjustments, similarity);
   }
 
-  async checkOut(dto: AttendanceCheckOutDto, actor: AccessTokenPayload) {
+  async checkOut(
+    dto: AttendanceCheckOutDto,
+    file: Express.Multer.File,
+    actor: AccessTokenPayload,
+  ) {
+    const uploadedFile = assertFileProvided(file);
     const eventTime = this.parseEventTime(dto.eventTime);
     const employee = await this.findEmployeeOrThrow(dto.employeeId);
     assertWithinScope(actor, employee);
@@ -426,9 +440,7 @@ export class AttendanceService {
 
     const { imageUrl, similarity } = await this.verifyAndUploadAttendanceImage({
       employee,
-      eventType: 'check-out',
-      imageBase64: dto.imageBase64,
-      contentType: dto.contentType,
+      file: uploadedFile,
       similarityThreshold: template.faceSimilarityThreshold,
     });
 
@@ -498,6 +510,303 @@ export class AttendanceService {
     return this.toResponse(result.attendance, result.adjustments, similarity);
   }
 
+  /**
+   * Employee self-service check-in from the app (selfie, no terminal/operator
+   * involved). Unlike checkIn(), multiple sessions per day are allowed — each
+   * call creates a new AttendanceSession row, and the day's Attendance row is
+   * kept as the first-in/last-out summary (same collapse rule the turnstile
+   * ingestion uses) so payroll/KPI keep working unchanged.
+   */
+  async selfCheckIn(
+    dto: SelfAttendanceCheckInDto,
+    file: Express.Multer.File,
+    actor: AccessTokenPayload,
+  ) {
+    const uploadedFile = assertFileProvided(file);
+    const employee = await this.findEmployeeOrThrow(actor.sub);
+    const template = await this.getKpiTemplateOrDefault(
+      employee.companyId as string,
+    );
+
+    const eventTime = new Date();
+    const attendanceDate = toZonedDateOnly(eventTime, employee.timezone);
+
+    const openSession = await this.prisma.attendanceSession.findFirst({
+      where: {
+        employeeId: employee.id,
+        date: attendanceDate,
+        checkOut: null,
+      },
+    });
+
+    if (openSession) {
+      throw new ConflictException(
+        'You already have an open check-in for today. Check out first.',
+      );
+    }
+
+    const { imageUrl, similarity } = await this.verifyAndUploadAttendanceImage({
+      employee,
+      file: uploadedFile,
+      similarityThreshold: template.faceSimilarityThreshold,
+    });
+
+    const existingAttendance = await this.prisma.attendance.findUnique({
+      where: {
+        employeeId_date: {
+          employeeId: employee.id,
+          date: attendanceDate,
+        },
+      },
+    });
+
+    const approvedLeaveHours = await this.getApprovedLeaveHours(
+      employee.id,
+      attendanceDate,
+    );
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const nextTimes = this.collapseAttendanceTimes(
+        existingAttendance,
+        'check_in',
+        eventTime,
+      );
+      const metrics = this.calculateAttendanceMetrics(
+        employee.workSchedule,
+        attendanceDate,
+        nextTimes.checkIn,
+        nextTimes.checkOut,
+        employee.timezone,
+        approvedLeaveHours,
+      );
+
+      const attendance = existingAttendance
+        ? await tx.attendance.update({
+            where: { id: existingAttendance.id },
+            data: {
+              checkIn: nextTimes.checkIn,
+              checkOut: nextTimes.checkOut,
+              status: metrics.status,
+              source: AttendanceSource.mobile,
+              workStartTime: metrics.workStartTime,
+              workEndTime: metrics.workEndTime,
+              workedMinutes: metrics.workedMinutes,
+              lateMinutes: metrics.lateMinutes,
+              earlyLeaveMinutes: metrics.earlyLeaveMinutes,
+              overtimeMinutes: metrics.overtimeMinutes,
+              checkInImageUrl: existingAttendance.checkInImageUrl ?? imageUrl,
+            },
+          })
+        : await tx.attendance.create({
+            data: {
+              companyId: employee.companyId as string,
+              branchId: employee.branchId,
+              employeeId: employee.id,
+              date: attendanceDate,
+              checkIn: nextTimes.checkIn,
+              checkOut: nextTimes.checkOut,
+              status: metrics.status,
+              source: AttendanceSource.mobile,
+              workStartTime: metrics.workStartTime,
+              workEndTime: metrics.workEndTime,
+              workedMinutes: metrics.workedMinutes,
+              lateMinutes: metrics.lateMinutes,
+              earlyLeaveMinutes: metrics.earlyLeaveMinutes,
+              overtimeMinutes: metrics.overtimeMinutes,
+              checkInImageUrl: imageUrl,
+            },
+          });
+
+      const session = await tx.attendanceSession.create({
+        data: {
+          companyId: employee.companyId as string,
+          branchId: employee.branchId,
+          employeeId: employee.id,
+          attendanceId: attendance.id,
+          date: attendanceDate,
+          checkIn: eventTime,
+          checkInImageUrl: imageUrl,
+          checkInSimilarity: similarity,
+          notes: trimToNull(dto.notes),
+        },
+      });
+
+      const adjustments = await this.syncAttendanceAdjustments(
+        tx,
+        attendance,
+        template,
+        actor.sub,
+      );
+
+      return { attendance, session, adjustments };
+    });
+
+    if (
+      result.attendance.lateMinutes > 0 &&
+      !(await this.hasApprovedLeave(employee.id, attendanceDate))
+    ) {
+      await this.notifyLate(employee, result.attendance.lateMinutes);
+    }
+
+    return this.toSessionResponse(result.session);
+  }
+
+  /**
+   * Employee self-service check-out from the app. Closes the employee's
+   * currently open AttendanceSession and extends the day's Attendance
+   * checkOut to the latest event, same as selfCheckIn().
+   */
+  async selfCheckOut(
+    dto: SelfAttendanceCheckOutDto,
+    file: Express.Multer.File,
+    actor: AccessTokenPayload,
+  ) {
+    const uploadedFile = assertFileProvided(file);
+    const employee = await this.findEmployeeOrThrow(actor.sub);
+    const template = await this.getKpiTemplateOrDefault(
+      employee.companyId as string,
+    );
+
+    const eventTime = new Date();
+    const attendanceDate = toZonedDateOnly(eventTime, employee.timezone);
+
+    const openSession = await this.prisma.attendanceSession.findFirst({
+      where: {
+        employeeId: employee.id,
+        date: attendanceDate,
+        checkOut: null,
+      },
+      orderBy: { checkIn: 'desc' },
+    });
+
+    if (!openSession) {
+      throw new ConflictException('You must check in before check out');
+    }
+
+    const { imageUrl, similarity } = await this.verifyAndUploadAttendanceImage({
+      employee,
+      file: uploadedFile,
+      similarityThreshold: template.faceSimilarityThreshold,
+    });
+
+    const existingAttendance = await this.prisma.attendance.findUnique({
+      where: {
+        employeeId_date: {
+          employeeId: employee.id,
+          date: attendanceDate,
+        },
+      },
+    });
+
+    if (!existingAttendance) {
+      throw new NotFoundException('Attendance record not found for this session');
+    }
+
+    const approvedLeaveHours = await this.getApprovedLeaveHours(
+      employee.id,
+      attendanceDate,
+    );
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.attendanceSession.update({
+        where: { id: openSession.id },
+        data: {
+          checkOut: eventTime,
+          checkOutImageUrl: imageUrl,
+          checkOutSimilarity: similarity,
+          workedMinutes: calculateMinutesDifference(
+            openSession.checkIn,
+            eventTime,
+          ),
+          notes: this.mergeNotes(openSession.notes, dto.notes),
+        },
+      });
+
+      const nextTimes = this.collapseAttendanceTimes(
+        existingAttendance,
+        'check_out',
+        eventTime,
+      );
+      const metrics = this.calculateAttendanceMetrics(
+        employee.workSchedule,
+        attendanceDate,
+        nextTimes.checkIn,
+        nextTimes.checkOut,
+        employee.timezone,
+        approvedLeaveHours,
+      );
+
+      const attendance = await tx.attendance.update({
+        where: { id: existingAttendance.id },
+        data: {
+          checkIn: nextTimes.checkIn,
+          checkOut: nextTimes.checkOut,
+          status: metrics.status,
+          source: AttendanceSource.mobile,
+          workStartTime: metrics.workStartTime,
+          workEndTime: metrics.workEndTime,
+          workedMinutes: metrics.workedMinutes,
+          lateMinutes: metrics.lateMinutes,
+          earlyLeaveMinutes: metrics.earlyLeaveMinutes,
+          overtimeMinutes: metrics.overtimeMinutes,
+          checkOutImageUrl: imageUrl,
+        },
+      });
+
+      const adjustments = await this.syncAttendanceAdjustments(
+        tx,
+        attendance,
+        template,
+        actor.sub,
+      );
+
+      return { attendance, session, adjustments };
+    });
+
+    await this.notifyAdjustments(employee, result.adjustments);
+
+    return this.toSessionResponse(result.session);
+  }
+
+  async selfListSessions(
+    query: AttendanceSessionQueryDto,
+    actor: AccessTokenPayload,
+  ) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.AttendanceSessionWhereInput = {
+      employeeId: actor.sub,
+      ...(query.dateFrom || query.dateTo
+        ? {
+            date: {
+              ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
+              ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.attendanceSession.findMany({
+        where,
+        orderBy: [{ date: 'desc' }, { checkIn: 'desc' }],
+        skip,
+        take: limit,
+      }),
+      this.prisma.attendanceSession.count({ where }),
+    ]);
+
+    return {
+      items: items.map((item) => this.toSessionResponse(item)),
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
+  }
+
   async findAll(query: AttendanceQueryDto, actor: AccessTokenPayload) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
@@ -507,6 +816,8 @@ export class AttendanceService {
       branchId: query.branchId,
     });
 
+    const search = trimToNull(query.search);
+
     const where: Prisma.AttendanceWhereInput = {
       ...(scope.companyId ? { companyId: scope.companyId } : {}),
       ...(scope.branchId ? { branchId: scope.branchId } : {}),
@@ -514,11 +825,36 @@ export class AttendanceService {
       ...(query.terminalId ? { terminalId: query.terminalId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...this.buildDateRangeFilter(query.dateFrom, query.dateTo),
+      ...(search
+        ? {
+            employee: {
+              OR: [
+                { firstName: { contains: search, mode: 'insensitive' } },
+                { lastName: { contains: search, mode: 'insensitive' } },
+                { login: { contains: search, mode: 'insensitive' } },
+                { phone: { contains: search, mode: 'insensitive' } },
+                { employeeNo: { contains: search, mode: 'insensitive' } },
+              ],
+            },
+          }
+        : {}),
     };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.attendance.findMany({
         where,
+        include: {
+          employee: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              employeeNo: true,
+              phone: true,
+              avatarUrl: true,
+            },
+          },
+        },
         orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
         skip,
         take: limit,
@@ -528,7 +864,12 @@ export class AttendanceService {
 
     const responses = await Promise.all(
       items.map(async (item) =>
-        this.toResponse(item, await this.loadAdjustmentsForAttendance(item)),
+        this.toResponse(
+          item,
+          await this.loadAdjustmentsForAttendance(item),
+          undefined,
+          item.employee,
+        ),
       ),
     );
 
@@ -544,6 +885,18 @@ export class AttendanceService {
   async findOne(id: string, actor: AccessTokenPayload) {
     const attendance = await this.prisma.attendance.findUnique({
       where: { id },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            employeeNo: true,
+            phone: true,
+            avatarUrl: true,
+          },
+        },
+      },
     });
 
     if (!attendance) {
@@ -555,14 +908,21 @@ export class AttendanceService {
     return this.toResponse(
       attendance,
       await this.loadAdjustmentsForAttendance(attendance),
+      undefined,
+      attendance.employee,
     );
   }
 
+  /**
+   * Verifies the uploaded selfie (saved to disk by multer under
+   * uploads/attendance/) against the employee's reference face image via AWS
+   * Rekognition, then returns the local URL to persist on
+   * Attendance/AttendanceSession. No S3 involved — Rekognition only reads the
+   * file bytes for comparison, it never stores them.
+   */
   private async verifyAndUploadAttendanceImage(input: {
     employee: UserWithSchedule;
-    eventType: 'check-in' | 'check-out';
-    imageBase64: string;
-    contentType?: string;
+    file: Express.Multer.File;
     similarityThreshold: number;
   }): Promise<{ imageUrl: string; similarity: number }> {
     const referenceImageUrl = trimToNull(input.employee.faceImageUrl);
@@ -573,16 +933,7 @@ export class AttendanceService {
       );
     }
 
-    const { buffer, contentType: decodedContentType } = decodeBase64Image(
-      input.imageBase64,
-    );
-
-    if (!buffer.length) {
-      throw new BadRequestException('Attendance image is empty');
-    }
-
-    const contentType =
-      trimToNull(input.contentType) ?? decodedContentType ?? 'image/jpeg';
+    const buffer = await readFile(input.file.path);
 
     const similarity =
       await this.awsFaceVerificationService.verifyAttendanceFace({
@@ -591,16 +942,8 @@ export class AttendanceService {
         similarityThreshold: input.similarityThreshold,
       });
 
-    const uploadedImage = await this.awsS3Service.uploadAttendanceImage({
-      companyId: input.employee.companyId as string,
-      employeeId: input.employee.id,
-      eventType: input.eventType,
-      contentType,
-      imageBuffer: buffer,
-    });
-
     return {
-      imageUrl: uploadedImage.url,
+      imageUrl: buildUploadUrl('attendance', input.file.filename),
       similarity,
     };
   }
@@ -816,12 +1159,26 @@ export class AttendanceService {
     attendance: Attendance,
     appliedAdjustments: AttendanceAdjustmentDto[],
     faceSimilarity?: number,
+    employee?: Pick<
+      User,
+      'id' | 'firstName' | 'lastName' | 'employeeNo' | 'phone' | 'avatarUrl'
+    > | null,
   ) {
     return {
       id: attendance.id,
       companyId: attendance.companyId,
       branchId: attendance.branchId,
       employeeId: attendance.employeeId,
+      employee: employee
+        ? {
+            id: employee.id,
+            firstName: employee.firstName,
+            lastName: employee.lastName,
+            employeeNo: employee.employeeNo,
+            phone: employee.phone,
+            avatarUrl: employee.avatarUrl,
+          }
+        : undefined,
       terminalId: attendance.terminalId,
       date: attendance.date,
       checkIn: attendance.checkIn,
@@ -841,6 +1198,59 @@ export class AttendanceService {
       appliedAdjustments,
       createdAt: attendance.createdAt,
       updatedAt: attendance.updatedAt,
+    };
+  }
+
+  /**
+   * First-in/last-out collapse rule for a day's Attendance summary when it's
+   * fed by discrete session events (mirrors TurnstileService's
+   * getNextAttendanceTimes, applied here to the mobile self-check-in path).
+   */
+  private collapseAttendanceTimes(
+    attendance: Attendance | null,
+    eventType: 'check_in' | 'check_out',
+    eventTime: Date,
+  ): { checkIn: Date | null; checkOut: Date | null } {
+    const currentCheckIn = attendance?.checkIn ?? null;
+    const currentCheckOut = attendance?.checkOut ?? null;
+
+    if (eventType === 'check_in') {
+      return {
+        checkIn:
+          !currentCheckIn || eventTime.getTime() < currentCheckIn.getTime()
+            ? eventTime
+            : currentCheckIn,
+        checkOut: currentCheckOut,
+      };
+    }
+
+    return {
+      checkIn: currentCheckIn,
+      checkOut:
+        !currentCheckOut || eventTime.getTime() > currentCheckOut.getTime()
+          ? eventTime
+          : currentCheckOut,
+    };
+  }
+
+  private toSessionResponse(session: AttendanceSession) {
+    return {
+      id: session.id,
+      companyId: session.companyId,
+      branchId: session.branchId,
+      employeeId: session.employeeId,
+      attendanceId: session.attendanceId,
+      date: session.date,
+      checkIn: session.checkIn,
+      checkOut: session.checkOut,
+      checkInImageUrl: session.checkInImageUrl,
+      checkOutImageUrl: session.checkOutImageUrl,
+      checkInSimilarity: session.checkInSimilarity,
+      checkOutSimilarity: session.checkOutSimilarity,
+      workedMinutes: session.workedMinutes,
+      notes: session.notes,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
     };
   }
 
